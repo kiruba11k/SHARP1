@@ -6,7 +6,7 @@ import os
 from dotenv import load_dotenv
 import json
 import re
-import groq
+from groq import Groq
 import pandas as pd
 import pyperclip
 from urllib.parse import urljoin, urlparse
