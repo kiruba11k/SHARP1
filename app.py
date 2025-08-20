@@ -2,17 +2,18 @@
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
-from langchain.chat_models import ChatOpenAI
-from langchain.schema import HumanMessage, SystemMessage
 from typing import Dict, Any, List, TypedDict
 import os
+from dotenv import load_dotenv
 import json
 import re
+import groq
+import pandas as pd
+import pyperclip
 from urllib.parse import urljoin, urlparse
-from groq import Groq
 
 # Load environment variables
-GROQ_API_KEY = st.secrets["GROQ_API_KEY"]    
+load_dotenv()
 
 class CompanyState(TypedDict):
     company_url: str
@@ -35,11 +36,6 @@ def setup_page():
     st.markdown("""
     This tool analyzes company websites to extract key business insights and identify opportunities for Sharp SSDI's document management solutions.
     """)
-    
-    # Add logo and branding
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.image("https://www.sharp.co.in/assets/img/SSDI_Logo.png", use_container_width=False)
 
 def extract_website_content(url: str) -> str:
     """Extract text content from a company website with improved parsing"""
@@ -78,10 +74,10 @@ def extract_website_content(url: str) -> str:
         st.error(f"Error extracting content: {str(e)}")
         return "", ""
 
-def analyze_with_groq(prompt: str) -> str:
+def analyze_with_groq(prompt: str, model: str = "mixtral-8x7b-32768") -> str:
     """Use Groq API for analysis"""
     try:
-        client =Groq(api_key=GROQ_API_KEY)
+        client = groq.Groq(api_key=os.getenv("GROQ_API_KEY"))
         
         response = client.chat.completions.create(
             messages=[
@@ -94,7 +90,7 @@ def analyze_with_groq(prompt: str) -> str:
                     "content": prompt
                 }
             ],
-            model="llama-3.3-70b-versatile",  #  "llama2-70b-4096" 
+            model=model,
             temperature=0.1,
             max_tokens=4000
         )
@@ -104,7 +100,7 @@ def analyze_with_groq(prompt: str) -> str:
         st.error(f"Groq API error: {str(e)}")
         return ""
 
-def analyze_company_content(state: CompanyState) -> CompanyState:
+def analyze_company_content(state: CompanyState, model: str) -> CompanyState:
     """Use Groq to analyze company content and extract required information"""
     
     prompt = f"""
@@ -154,7 +150,7 @@ def analyze_company_content(state: CompanyState) -> CompanyState:
     """
     
     try:
-        response = analyze_with_groq(prompt)
+        response = analyze_with_groq(prompt, model)
         
         if not response:
             return {
@@ -232,7 +228,7 @@ def display_results_table(state: CompanyState):
         st.markdown(df_growth.to_markdown(index=False), unsafe_allow_html=True)
         
         # Add copy button for growth initiatives
-        if st.button(" Copy Growth Initiatives", key="copy_growth"):
+        if st.button("Copy Growth Initiatives", key="copy_growth"):
             growth_text = "\n".join([f"{i}. {item['Initiative']} - Source: {item.get('source', 'N/A')}" 
                                    for i, item in enumerate(state.get('growth_initiatives', []), 1)])
             pyperclip.copy(growth_text)
@@ -302,7 +298,7 @@ def display_results_table(state: CompanyState):
     st.markdown("---")
     
     # Add full report copy button
-    if st.button("Copy Full Report", key="copy_full"):
+    if st.button(" Copy Full Report", key="copy_full"):
         full_text = f"""
 Analysis Report for {state.get('company_name', 'the company')}
 
