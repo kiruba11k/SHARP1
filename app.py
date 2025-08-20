@@ -6,13 +6,14 @@ from langchain.chat_models import ChatOpenAI
 from langchain.schema import HumanMessage, SystemMessage
 from typing import Dict, Any, List, TypedDict
 import os
-from dotenv import load_dotenv
 import json
 import re
 from urllib.parse import urljoin, urlparse
+import groq
 
 # Load environment variables
-OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"] 
+GROQ_API_KEY = st.secrets["GROQ_API_KEY"]    
+
 class CompanyState(TypedDict):
     company_url: str
     extracted_content: str
@@ -30,7 +31,7 @@ def setup_page():
         page_title="Sharp SSDI Company Analysis",
         layout="wide"
     )
-    st.title(" Sharp SSDI Company Analysis Agent")
+    st.title("Sharp SSDI Company Analysis Agent")
     st.markdown("""
     This tool analyzes company websites to extract key business insights and identify opportunities for Sharp SSDI's document management solutions.
     """)
@@ -38,7 +39,7 @@ def setup_page():
     # Add logo and branding
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        st.image("https://www.sharp.co.in/assets/img/SSDI_Logo.png", use_container_width=True)
+        st.image("https://via.placeholder.com/300x100?text=Sharp+SSDI", use_container_width=True)
 
 def extract_website_content(url: str) -> str:
     """Extract text content from a company website with improved parsing"""
@@ -77,17 +78,36 @@ def extract_website_content(url: str) -> str:
         st.error(f"Error extracting content: {str(e)}")
         return "", ""
 
+def analyze_with_groq(prompt: str) -> str:
+    """Use Groq API for analysis"""
+    try:
+        client =Groq(api_key=GROQ_API_KEY)
+        
+        response = client.chat.completions.create(
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a business analyst expert at identifying document management and contract lifecycle opportunities."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            model="mixtral-8x7b-32768",  #  "llama2-70b-4096" 
+            temperature=0.1,
+            max_tokens=4000
+        )
+        
+        return response.choices[0].message.content
+    except Exception as e:
+        st.error(f"Groq API error: {str(e)}")
+        return ""
+
 def analyze_company_content(state: CompanyState) -> CompanyState:
-    """Use LLM to analyze company content and extract required information"""
-    llm = ChatOpenAI(
-        model_name="gpt-3.5-turbo-16k",
-        temperature=0.1,
-        openai_api_key=OPENAI_API_KEY
-    )
+    """Use Groq to analyze company content and extract required information"""
     
     prompt = f"""
-    You are a business analyst specializing in identifying document management and contract lifecycle management opportunities.
-    
     Analyze the following company information and provide structured outputs:
 
     COMPANY CONTENT:
@@ -134,14 +154,21 @@ def analyze_company_content(state: CompanyState) -> CompanyState:
     """
     
     try:
-        response = llm([
-            SystemMessage(content="You are a business analyst expert at identifying document management and contract lifecycle opportunities."),
-            HumanMessage(content=prompt)
-        ])
+        response = analyze_with_groq(prompt)
+        
+        if not response:
+            return {
+                "growth_initiatives": [],
+                "it_issues": [],
+                "industry_pain_points": "",
+                "company_pain_points": "",
+                "products_services": "",
+                "pitch": "",
+                "analysis_complete": False
+            }
         
         # Clean the response to extract JSON
-        response_text = response.content
-        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        json_match = re.search(r'\{.*\}', response, re.DOTALL)
         
         if json_match:
             analysis = json.loads(json_match.group())
@@ -209,7 +236,7 @@ def display_results(state: CompanyState):
                 st.write(f"{i}. {issue}")
                 
         with col2:
-            st.subheader(" Industry Pain Points")
+            st.subheader("Industry Pain Points")
             st.info(state.get('industry_pain_points', 'No pain points identified'))
     
     with tab3:
@@ -238,8 +265,8 @@ def main():
     setup_page()
     
     # Check for API key
-    if not os.getenv("OPENAI_API_KEY"):
-        st.warning("Please set the OPENAI_API_KEY environment variable in your Streamlit Cloud settings.")
+    if not os.getenv("GROQ_API_KEY"):
+        st.warning("Please set the GROQ_API_KEY environment variable in your Streamlit Cloud settings.")
     
     # Input section
     with st.form("company_analysis_form"):
@@ -247,6 +274,12 @@ def main():
             "Enter Company URL:",
             placeholder="https://example.com",
             help="Enter the full URL of the company website you want to analyze"
+        )
+        
+        # Model selection
+        model_option = st.selectbox(
+            "Select Groq Model:",
+            ("mixtral-8x7b-32768", "llama2-70b-4096", "gemma-7b-it")
         )
         
         submitted = st.form_submit_button("Analyze Company")
