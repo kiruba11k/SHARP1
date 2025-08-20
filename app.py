@@ -94,7 +94,7 @@ def analyze_with_groq(prompt: str) -> str:
                     "content": prompt
                 }
             ],
-            model="mixtral-8x7b-32768",  #  "llama2-70b-4096" 
+            model="llama2-70b-409",  #  "llama2-70b-4096" 
             temperature=0.1,
             max_tokens=4000
         )
