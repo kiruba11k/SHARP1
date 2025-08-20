@@ -6,4 +6,5 @@ openai
 python-dotenv
 lxml
 trafilatura
-langraph
+langgraph
+langchain-community
