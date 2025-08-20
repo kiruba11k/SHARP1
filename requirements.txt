@@ -1,0 +1,9 @@
+streamlit
+langchain
+beautifulsoup4
+requests
+openai
+python-dotenv
+lxml
+trafilatura
+langraph
