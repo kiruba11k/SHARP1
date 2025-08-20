@@ -8,3 +8,4 @@ trafilatura
 langgraph
 langchain-community
 groq
+pyperclip
