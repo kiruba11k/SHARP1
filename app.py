@@ -38,7 +38,7 @@ def setup_page():
     # Add logo and branding
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        st.image("https://via.placeholder.com/300x100?text=Sharp+SSDI", use_column_width=True)
+        st.image("https://via.placeholder.com/300x100?text=Sharp+SSDI", use_container_width=True)
 
 def extract_website_content(url: str) -> str:
     """Extract text content from a company website with improved parsing"""
