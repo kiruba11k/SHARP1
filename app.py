@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
@@ -12,8 +11,8 @@ import pandas as pd
 import pyperclip
 from urllib.parse import urljoin, urlparse
 
-# Load environment variables
-load_dotenv()
+GROQ_API_KEY = st.secrets["GROQ_API_KEY"]    
+
 
 class CompanyState(TypedDict):
     company_url: str
@@ -74,10 +73,10 @@ def extract_website_content(url: str) -> str:
         st.error(f"Error extracting content: {str(e)}")
         return "", ""
 
-def analyze_with_groq(prompt: str, model: str = "mixtral-8x7b-32768") -> str:
+def analyze_with_groq(prompt: str, model: str = "llama-3.3-70b-versatile") -> str:
     """Use Groq API for analysis"""
     try:
-        client = groq.Groq(api_key=os.getenv("GROQ_API_KEY"))
+        client = Groq(api_key=GROQ_API_KEY)
         
         response = client.chat.completions.create(
             messages=[
