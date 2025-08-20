@@ -12,7 +12,7 @@ import re
 from urllib.parse import urljoin, urlparse
 
 # Load environment variables
-OPEN_API_KEY = st.secrets["OPEN_API_KEY"] 
+OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"] 
 class CompanyState(TypedDict):
     company_url: str
     extracted_content: str
@@ -82,7 +82,7 @@ def analyze_company_content(state: CompanyState) -> CompanyState:
     llm = ChatOpenAI(
         model_name="gpt-3.5-turbo-16k",
         temperature=0.1,
-        openai_api_key=OPEN_API_KEY
+        openai_api_key=OPENAI_API_KEY
     )
     
     prompt = f"""
