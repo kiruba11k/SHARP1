@@ -365,7 +365,7 @@ def main():
             
             model_option = st.selectbox(
                 "Select Groq Model:",
-                ["mixtral-8x7b-32768", "llama2-70b-4096", "gemma-7b-it", "llama3-8b-8192", "llama3-70b-8192"],
+                ["llama-3.3-70B-Versatile", "llama2-70b-4096", "gemma-7b-it", "llama3-8b-8192", "llama3-70b-8192"],
                 index=0
             )
             
