@@ -299,7 +299,7 @@ async def bulk_analysis(model_option: str):
                 "Products/Services": result.get("products_services", ""),
                 "Pitch": result.get("pitch", ""),
                 "Source URL(s)": "; ".join([f'<a href="{gi.get("source", "")}" target="_blank">Source {i+1}</a>'for i, gi in enumerate(result.get("growth_initiatives", [])) if gi.get("source", "").startswith("http")])
-                )}
+                })
                 progress_bar.progress((idx + 1) / total)
 
             progress_bar.empty()
