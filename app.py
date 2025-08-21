@@ -20,6 +20,7 @@ class CompanyState(TypedDict):
     company_url: str
     extracted_content: str
     company_name: str
+    company_links: List[Dict[str, str]]
     growth_initiatives: List[Dict[str, str]]
     it_issues: List[str]
     industry_pain_points: str
@@ -66,7 +67,7 @@ async def scrape_with_playwright(url: str) -> (str, str):
         return "", ""
 
 # ----------------- FALLBACK SCRAPER (Requests + BS4) -----------------
-def scrape_with_requests(url: str) -> (str, str):
+def scrape_with_requests(url: str):
     try:
         if not url.startswith("http"):
             url = "https://" + url
@@ -85,9 +86,8 @@ def scrape_with_requests(url: str) -> (str, str):
         session.mount("https://", adapter)
 
         response = session.get(url, headers=headers, timeout=20)
-
         if response.status_code != 200:
-            return "", ""
+            return "", "", []
 
         soup = BeautifulSoup(response.content, "lxml")
         company_name = soup.title.text.split("|")[0].split("-")[0].strip() if soup.title else "Unknown"
@@ -100,13 +100,13 @@ def scrape_with_requests(url: str) -> (str, str):
             main_content = soup.get_text(separator=' ', strip=True)
 
         if len(main_content) < 500:
-            return "", ""
+            return "", "", []
 
         content = f"COMPANY NAME: {company_name}\n\n{main_content}"[:15000]
-        return content, company_name
+        links = extract_links_and_text(soup)
+        return content, company_name, links
     except:
-        return "", ""
-
+        return "", "", []
 
 def normalize_url(url: str, base_url: str = "") -> str:
     if not url:
@@ -118,11 +118,13 @@ def normalize_url(url: str, base_url: str = "") -> str:
         return base_url.rstrip("/") + url  
     return "https://" + url  
 # ----------------- MAIN EXTRACTION FUNCTION -----------------
-async def extract_website_content(url: str) -> (str, str):
+async def extract_website_content(url: str):
     content, name = await scrape_with_playwright(url)
+    links = []
     if not content:
-        content, name = scrape_with_requests(url)
-    return content, name
+        content, name, links = scrape_with_requests(url)
+    return content, name, links
+
 
 # ----------------- GROQ ANALYSIS -----------------
 def analyze_with_groq(prompt: str, model: str = "llama-3.3-70B-Versatile") -> str:
@@ -148,6 +150,9 @@ def analyze_company_content(state: CompanyState, model: str) -> CompanyState:
 
     COMPANY CONTENT:
     {state['extracted_content']}
+
+    AVAILABLE LINKS:
+    {json.dumps(state['company_links'], indent=2)}
 
     REQUIRED OUTPUTS:
 
@@ -175,7 +180,7 @@ def analyze_company_content(state: CompanyState, model: str) -> CompanyState:
     Format your response as JSON with the following structure:
     {{
         "growth_initiatives": [
-            {{"initiative": "summary text", "source": "url or source reference"}}
+            {{"initiative": "summary text", "source": "must be one of the urls from AVAILABLE LINKS"}}
         ],
         "it_issues": ["issue 1", "issue 2", "issue 3"],
         "industry_pain_points": "text here",
@@ -212,11 +217,12 @@ def display_results(state: CompanyState):
         st.subheader("Growth/Transformation Initiatives")
         for i, initiative in enumerate(state.get('growth_initiatives', []), 1):
             text = initiative.get('initiative', 'N/A')
-            source = normalize_url(initiative.get('source'))
-            if source:
+            source = initiative.get('source', '')
+            if source.startswith('http'):
                 st.markdown(f"**{i}. [{text}]({source})**")
             else:
-                st.write(f"**{i}. {text}**")
+                st.write(f"**{i}. {text}** (No valid link)")
+
 
     with tab2:
         st.subheader("IT-Related Issues")
@@ -236,7 +242,18 @@ def display_results(state: CompanyState):
         st.write(state.get('pitch', 'No pitch recommendation generated'))
 
 
-
+def extract_links_and_text(soup):
+    links = []
+    for a in soup.find_all('a', href=True):
+        text = a.get_text(" ", strip=True)
+        href = a['href']
+        if href and text:
+            if href.startswith('/'):
+                href = "https://" + soup.find('meta', attrs={'property': 'og:url'})['content'].strip('/') + href
+            elif not href.startswith("http"):
+                href = "https://" + href.lstrip("/")
+            links.append({"text": text, "url": href})
+    return links
 # ----------------- BULK ANALYSIS -----------------
 async def bulk_analysis(model_option: str):
     start_time = time.time()
@@ -271,8 +288,7 @@ async def bulk_analysis(model_option: str):
                 result["company_name"] = company_name
 
                 growth_text = "; ".join([gi.get("initiative", "") for gi in result.get("growth_initiatives", [])])
-                sources_text = "; ".join([f'=HYPERLINK("{normalize_url(gi.get("source", ""))}", "Source {i+1}")'for i, gi in enumerate(result.get("growth_initiatives", [])) if gi.get("source")])
-
+                sources_text = "; ".join([f'=HYPERLINK("{gi.get("source", "")}", "Source {i+1}")'for i, gi in enumerate(result.get("growth_initiatives", [])) if gi.get("source", "").startswith("http")])
                 results.append({
                 "Website URL": url,
                 "Company Name": company_name,
@@ -282,8 +298,7 @@ async def bulk_analysis(model_option: str):
                 "Company Pain Points": result.get("company_pain_points", ""),
                 "Products/Services": result.get("products_services", ""),
                 "Pitch": result.get("pitch", ""),
-                "Source URL(s)": "; ".join([f'<a href="{normalize_url(gi.get("source", ""))}" target="_blank">Source {i+1}</a>'for i, gi in enumerate(result.get("growth_initiatives", [])) if gi.get("source")])
-                })
+                "Source URL(s)": "; ".join([f'<a href="{gi.get("source", "")}" target="_blank">Source {i+1}</a>'for i, gi in enumerate(result.get("growth_initiatives", [])) if gi.get("source", "").startswith("http")])
 
                 progress_bar.progress((idx + 1) / total)
 
