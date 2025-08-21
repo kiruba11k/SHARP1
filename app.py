@@ -225,45 +225,30 @@ def analyze_company_content(state: CompanyState, model: str) -> CompanyState:
                     gi["source"] = ""  # Clear invalid sources
 
             # Second pass: find best matches for initiatives without sources
-            for gi in analysis.get("growth_initiatives", []):
-                if not gi.get("source"):
-                    best_match = None
-                    best_score = 0
-                    initiative_text = gi["initiative"].lower()
-                    
-                    for link in state["company_links"]:
-                        if link["url"] in used_links:
-                            continue
-                            
+            initiatives_without_sources = [gi for gi in analysis.get("growth_initiatives", []) if not gi.get("source")]
+            
+            for gi in initiatives_without_sources:
+                best_match = None
+                best_score = 0
+                initiative_text = gi["initiative"].lower()
+                
+                # Extract keywords from initiative text
+                initiative_keywords = extract_keywords(initiative_text)
+                
+                for link in state["company_links"]:
+                    if link["url"] in used_links:
+                        continue                
                         # Calculate relevance score based on text similarity
-                        link_text = link["text"].lower()
-                        score = 0
-                        
-                        # Check for exact matches of important words
-                        important_words = ["growth", "initiative", "transform", "digital", "strategy", 
-                                         "expansion", "innovation", "project", "program", "invest"]
-                        
-                        for word in important_words:
-                            if word in initiative_text and word in link_text:
-                                score += 3
-                                
-                        # Check for shared words
-                        shared_words = set(initiative_text.split()) & set(link_text.split())
-                        score += len(shared_words)
-                        
-                        # Check if URL path contains relevant keywords
-                        parsed_url = urlparse(link["url"])
-                        path = parsed_url.path.lower()
-                        if any(word in path for word in ["blog", "news", "press", "media", "insights"]):
-                            score += 2
-                            
-                        if score > best_score:
-                            best_score = score
-                            best_match = link["url"]
+                    link_text = link["text"].lower()
+                    score = calculate_relevance_score(initiative_text, initiative_keywords, link_text, link["url"])
                     
-                    if best_match:
-                        gi["source"] = best_match
-                        used_links.add(best_match)
+                    if score > best_score:
+                        best_score = score
+                        best_match = link["url"]
+                        
+                 if best_match and best_score > 2:  # Only use if score is above threshold
+                    gi["source"] = best_match
+                    used_links.add(best_match)
 
             return {
                 "growth_initiatives": analysis.get("growth_initiatives", []),
@@ -274,11 +259,56 @@ def analyze_company_content(state: CompanyState, model: str) -> CompanyState:
                 "pitch": analysis.get("pitch", ""),
                 "analysis_complete": True
             }
+
         else:
             return {**state, "analysis_complete": False}
     except Exception as e:
         st.error(f"Analysis error: {str(e)}")
         return {**state, "analysis_complete": False}
+
+def extract_keywords(text):
+    """Extract important keywords from text"""
+    # Remove common stop words
+    stop_words = {"the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by"}
+    words = text.split()
+    return [word for word in words if word not in stop_words and len(word) > 3]
+
+def calculate_relevance_score(initiative_text, initiative_keywords, link_text, link_url):
+    """Calculate how relevant a link is to an initiative"""
+    score = 0
+    
+    # Check for exact matches of important words
+    for word in initiative_keywords:
+        if word in link_text:
+            score += 3
+        if word in link_url:
+            score += 2
+            
+    # Check for shared words
+    shared_words = set(initiative_text.split()) & set(link_text.split())
+    score += len(shared_words)
+    
+    # Check if URL path contains relevant sections
+    parsed_url = urlparse(link_url)
+    path = parsed_url.path.lower()
+    
+    # Bonus for relevant URL sections
+    relevant_sections = ["news", "blog", "press", "media", "insights", "updates", "announcements"]
+    for section in relevant_sections:
+        if section in path:
+            score += 2
+    
+    # Penalize irrelevant URL sections
+    irrelevant_sections = ["image", "img", "photo", "picture", "css", "js", "static", "assets"]
+    for section in irrelevant_sections:
+        if section in path:
+            score -= 5
+    
+    # Penalize very short link text
+    if len(link_text) < 5:
+        score -= 3
+        
+    return score
 
 # ----------------- DISPLAY RESULTS -----------------
 def display_results(state: CompanyState):
@@ -291,10 +321,12 @@ def display_results(state: CompanyState):
             text = initiative.get('initiative', 'N/A')
             source = initiative.get('source', '')
             if source.startswith('http'):
-                st.markdown(f"**{i}. {text}** - [Source]({source})")
+                st.markdown(f"**{i}. {text}**")
+                st.markdown(f"Source: [{source}]({source})")
+                st.markdown("---")
             else:
-                st.write(f"**{i}. {text}** (No valid link found)")
-
+                st.write(f"**{i}. {text}** (No relevant source found)")
+                st.markdown("---")
     with tab2:
         st.subheader("IT-Related Issues")
         for i, issue in enumerate(state.get('it_issues', []), 1):
@@ -317,10 +349,16 @@ def extract_links_and_text(soup, base_url):
     for a in soup.find_all('a', href=True):
         text = a.get_text(" ", strip=True)
         href = a['href']
-        if href and text and len(text) > 3:  # Filter out very short link texts
+        
+        # Filter out irrelevant links
+        if (href and text and len(text) > 3 and 
+            not href.startswith(('javascript:', 'mailto:', 'tel:')) and
+            not any(ext in href.lower() for ext in ['.jpg', '.jpeg', '.png', '.gif', '.css', '.js'])):
+            
             normalized_url = normalize_url(href, base_url)
             if normalized_url and normalized_url.startswith("http"):
                 links.append({"text": text, "url": normalized_url})
+    
     return links
 
 # ----------------- BULK ANALYSIS -----------------
