@@ -1,3 +1,4 @@
+import time
 import streamlit as st
 import json
 import re
@@ -221,8 +222,11 @@ def display_results(state: CompanyState):
         st.subheader("Pitch Recommendation")
         st.write(state.get('pitch', 'No pitch recommendation generated'))
 
+
+
 # ----------------- BULK ANALYSIS -----------------
 async def bulk_analysis(model_option: str):
+    start_time = time.time()
     st.subheader("Upload CSV with Website URLs")
     uploaded_file = st.file_uploader("Upload a CSV file", type=["csv"])
 
@@ -254,18 +258,18 @@ async def bulk_analysis(model_option: str):
                 result["company_name"] = company_name
 
                 growth_text = "; ".join([gi.get("initiative", "") for gi in result.get("growth_initiatives", [])])
-                sources_text = "; ".join([gi.get("source", "") for gi in result.get("growth_initiatives", [])])
+                sources_text = "; ".join([ f'=HYPERLINK("{gi.get("source", "")}", "Source {i+1}")' for i, gi in enumerate(result.get("growth_initiatives", [])) if gi.get("source")])
 
                 results.append({
-                    "Website URL": url,
-                    "Company Name": company_name,
-                    "Growth Initiatives": growth_text,
-                    "IT Issues": "; ".join(result.get("it_issues", [])),
-                    "Industry Pain Points": result.get("industry_pain_points", ""),
-                    "Company Pain Points": result.get("company_pain_points", ""),
-                    "Products/Services": result.get("products_services", ""),
-                    "Pitch": result.get("pitch", ""),
-                    "Source URL(s)": sources_text
+                "Website URL": url,
+                "Company Name": company_name,
+                "Growth Initiatives": "; ".join([gi.get("initiative", "") for gi in result.get("growth_initiatives", [])]),
+                "IT Issues": "; ".join(result.get("it_issues", [])),
+                "Industry Pain Points": result.get("industry_pain_points", ""),
+                "Company Pain Points": result.get("company_pain_points", ""),
+                "Products/Services": result.get("products_services", ""),
+                "Pitch": result.get("pitch", ""),
+                "Source URL(s)": sources_text
                 })
 
                 progress_bar.progress((idx + 1) / total)
@@ -280,6 +284,10 @@ async def bulk_analysis(model_option: str):
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
                 result_df.to_excel(writer, index=False, sheet_name="Analysis Results")
             output.seek(0)
+            end_time = time.time()
+            elapsed_time = end_time - start_time
+            minutes, seconds = divmod(elapsed_time, 60)
+            st.success(f" Analysis completed in {int(minutes)} min {int(seconds)} sec")
 
             st.download_button(label="Download Excel", data=output,
                                file_name="company_analysis_results.xlsx",
