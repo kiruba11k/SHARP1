@@ -6,13 +6,11 @@ import os
 from dotenv import load_dotenv
 import json
 import re
-from groq import Groq
+import groq
 import pandas as pd
-import pyperclip
-from urllib.parse import urljoin, urlparse
+from io import BytesIO
 
-GROQ_API_KEY = st.secrets["GROQ_API_KEY"]    
-
+GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 
 class CompanyState(TypedDict):
     company_url: str
@@ -31,7 +29,7 @@ def setup_page():
         page_title="Sharp SSDI Company Analysis",
         layout="wide"
     )
-    st.title("Sharp SSDI Company Analysis Agent")
+    st.title(" Sharp SSDI Company Analysis Agent")
     st.markdown("""
     This tool analyzes company websites to extract key business insights and identify opportunities for Sharp SSDI's document management solutions.
     """)
@@ -73,10 +71,12 @@ def extract_website_content(url: str) -> str:
         st.error(f"Error extracting content: {str(e)}")
         return "", ""
 
-def analyze_with_groq(prompt: str, model: str = "llama-3.3-70b-versatile") -> str:
+def analyze_with_groq(prompt: str, model: str = "mixtral-8x7b-32768") -> str:
     """Use Groq API for analysis"""
     try:
+        
         client = Groq(api_key=GROQ_API_KEY)
+
         
         response = client.chat.completions.create(
             messages=[
@@ -168,7 +168,6 @@ def analyze_company_content(state: CompanyState, model: str) -> CompanyState:
         if json_match:
             analysis = json.loads(json_match.group())
         else:
-            # Fallback if JSON parsing fails
             st.error("Failed to parse analysis results. Please try again.")
             return {
                 "growth_initiatives": [],
@@ -202,223 +201,211 @@ def analyze_company_content(state: CompanyState, model: str) -> CompanyState:
             "analysis_complete": False
         }
 
-def display_results_table(state: CompanyState):
-    """Display the analysis results in a table format"""
+def display_results(state: CompanyState):
+    """Display the analysis results in Streamlit"""
     st.header(f"Analysis Results for {state.get('company_name', 'the company')}")
     
-    # Create a table for Growth Initiatives
-    st.subheader(" Growth/Transformation Initiatives")
-    if state.get('growth_initiatives'):
-        growth_data = []
+    tab1, tab2, tab3, tab4 = st.tabs(["Growth Initiatives", "IT Issues & Pain Points", "Opportunities", "Pitch Recommendation"])
+    
+    with tab1:
+        st.subheader(" Growth/Transformation Initiatives")
         for i, initiative in enumerate(state.get('growth_initiatives', []), 1):
-            source = initiative.get('source', '')
-            if source and source.startswith('http'):
-                source_link = f"[Source]({source})"
-            else:
-                source_link = source if source else "Not available"
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                st.write(f"**{i}. {initiative.get('initiative', 'N/A')}**")
+            with col2:
+                source = initiative.get('source', '')
+                if source and source.startswith('http'):
+                    st.markdown(f"[Source]({source})", unsafe_allow_html=True)
+                elif source:
+                    st.caption(f"Source: {source}")
+    
+    with tab2:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader(" IT-Related Issues")
+            for i, issue in enumerate(state.get('it_issues', []), 1):
+                st.write(f"{i}. {issue}")
+                
+        with col2:
+            st.subheader("Industry Pain Points")
+            st.info(state.get('industry_pain_points', 'No pain points identified'))
+    
+    with tab3:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader(" Company Pain Points")
+            st.error(state.get('company_pain_points', 'No specific pain points identified'))
             
-            growth_data.append({
-                "#": i,
-                "Initiative": initiative.get('initiative', 'N/A'),
-                "Source": source_link
-            })
+        with col2:
+            st.subheader(" Recommended Solutions")
+            st.success(state.get('products_services', 'No specific solutions identified'))
+    
+    with tab4:
+        st.subheader("Pitch Recommendation")
+        st.markdown("---")
+        st.write(state.get('pitch', 'No pitch recommendation generated'))
+        st.markdown("---")
         
-        df_growth = pd.DataFrame(growth_data)
-        st.markdown(df_growth.to_markdown(index=False), unsafe_allow_html=True)
-        
-        # Add copy button for growth initiatives
-        if st.button("Copy Growth Initiatives", key="copy_growth"):
-            growth_text = "\n".join([f"{i}. {item['Initiative']} - Source: {item.get('source', 'N/A')}" 
-                                   for i, item in enumerate(state.get('growth_initiatives', []), 1)])
-            pyperclip.copy(growth_text)
-            st.success("Growth initiatives copied to clipboard!")
-    else:
-        st.info("No growth initiatives found.")
-    
-    st.markdown("---")
-    
-    # Create a table for IT Issues
-    st.subheader(" IT-Related Issues")
-    if state.get('it_issues'):
-        it_data = []
-        for i, issue in enumerate(state.get('it_issues', []), 1):
-            it_data.append({
-                "#": i,
-                "Issue": issue
-            })
-        
-        df_it = pd.DataFrame(it_data)
-        st.table(df_it)
-        
-        # Add copy button for IT issues
-        if st.button(" Copy IT Issues", key="copy_it"):
-            it_text = "\n".join([f"{i}. {issue}" for i, issue in enumerate(state.get('it_issues', []), 1)])
-            pyperclip.copy(it_text)
-            st.success("IT issues copied to clipboard!")
-    else:
-        st.info("No IT issues found.")
-    
-    st.markdown("---")
-    
-    # Create a table for Pain Points
-    st.subheader(" Pain Points")
-    pain_points_data = [
-        {"Type": "Industry Pain Points", "Description": state.get('industry_pain_points', 'Not identified')},
-        {"Type": "Company Pain Points", "Description": state.get('company_pain_points', 'Not identified')}
-    ]
-    
-    df_pain = pd.DataFrame(pain_points_data)
-    st.table(df_pain)
-    
-    # Add copy button for pain points
-    if st.button(" Copy Pain Points", key="copy_pain"):
-        pain_text = f"Industry Pain Points: {state.get('industry_pain_points', '')}\nCompany Pain Points: {state.get('company_pain_points', '')}"
-        pyperclip.copy(pain_text)
-        st.success("Pain points copied to clipboard!")
-    
-    st.markdown("---")
-    
-    # Create a table for Opportunities
-    st.subheader(" Opportunities for Sharp SSDI")
-    opportunities_data = [
-        {"Aspect": "Recommended Solutions", "Details": state.get('products_services', 'Not identified')},
-        {"Aspect": "Pitch Recommendation", "Details": state.get('pitch', 'Not identified')}
-    ]
-    
-    df_opp = pd.DataFrame(opportunities_data)
-    st.table(df_opp)
-    
-    # Add copy button for opportunities
-    if st.button(" Copy Opportunities", key="copy_opp"):
-        opp_text = f"Recommended Solutions: {state.get('products_services', '')}\nPitch Recommendation: {state.get('pitch', '')}"
-        pyperclip.copy(opp_text)
-        st.success("Opportunities copied to clipboard!")
-    
-    st.markdown("---")
-    
-    # Add full report copy button
-    if st.button(" Copy Full Report", key="copy_full"):
-        full_text = f"""
-Analysis Report for {state.get('company_name', 'the company')}
+        if st.button(" Copy Pitch to Clipboard"):
+            st.code(state.get('pitch', ''), language=None)
+            st.success("Pitch copied to clipboard!")
 
-GROWTH INITIATIVES:
-{chr(10).join([f"{i}. {item['initiative']} - Source: {item.get('source', 'N/A')}" for i, item in enumerate(state.get('growth_initiatives', []), 1)])}
+def bulk_analysis():
+    st.subheader("Upload CSV with Website URLs")
+    uploaded_file = st.file_uploader("Upload a CSV file", type=["csv"])
+    
+    model_option = st.selectbox(
+        "Select Groq Model:",
+        ["mixtral-8x7b-32768", "llama2-70b-4096", "gemma-7b-it", "llama3-8b-8192", "llama3-70b-8192"],
+        index=0
+    )
 
-IT ISSUES:
-{chr(10).join([f"{i}. {issue}" for i, issue in enumerate(state.get('it_issues', []), 1)])}
+    if uploaded_file is not None:
+        df = pd.read_csv(uploaded_file)
 
-PAIN POINTS:
-Industry: {state.get('industry_pain_points', '')}
-Company: {state.get('company_pain_points', '')}
+        if "website_url" not in df.columns:
+            st.error("CSV must contain a column named 'website_url'")
+            return
 
-OPPORTUNITIES:
-Recommended Solutions: {state.get('products_services', '')}
-Pitch Recommendation: {state.get('pitch', '')}
-"""
-        pyperclip.copy(full_text)
-        st.success("Full report copied to clipboard!")
+        if st.button("Start Bulk Analysis"):
+            results = []
+            progress_bar = st.progress(0)
+            total = len(df)
+
+            for idx, row in df.iterrows():
+                url = row["website_url"]
+                if not url.startswith("http"):
+                    url = "https://" + url
+                
+                extracted_content, company_name = extract_website_content(url)
+                
+                if not extracted_content:
+                    results.append({
+                        "Website URL": url,
+                        "Company Name": "",
+                        "Growth Initiatives": "",
+                        "IT Issues": "",
+                        "Industry Pain Points": "",
+                        "Company Pain Points": "",
+                        "Products/Services": "",
+                        "Pitch": "",
+                        "Source URL(s)": ""
+                    })
+                    continue
+                
+                state = CompanyState(
+                    company_url=url,
+                    extracted_content=extracted_content,
+                    company_name=company_name,
+                    growth_initiatives=[],
+                    it_issues=[],
+                    industry_pain_points="",
+                    company_pain_points="",
+                    products_services="",
+                    pitch="",
+                    analysis_complete=False
+                )
+
+                result = analyze_company_content(state, model_option)
+                result["company_name"] = company_name
+
+                growth_text = "; ".join([gi.get("initiative", "") for gi in result.get("growth_initiatives", [])])
+                sources_text = "; ".join([gi.get("source", "") for gi in result.get("growth_initiatives", [])])
+
+                results.append({
+                    "Website URL": url,
+                    "Company Name": company_name,
+                    "Growth Initiatives": growth_text,
+                    "IT Issues": "; ".join(result.get("it_issues", [])),
+                    "Industry Pain Points": result.get("industry_pain_points", ""),
+                    "Company Pain Points": result.get("company_pain_points", ""),
+                    "Products/Services": result.get("products_services", ""),
+                    "Pitch": result.get("pitch", ""),
+                    "Source URL(s)": sources_text
+                })
+
+                progress_bar.progress((idx + 1) / total)
+            
+            progress_bar.empty()
+            result_df = pd.DataFrame(results)
+
+            st.subheader("Analysis Results")
+            st.dataframe(result_df)
+
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                result_df.to_excel(writer, index=False, sheet_name="Analysis Results")
+            output.seek(0)
+
+            st.download_button(
+                label=" Download Excel",
+                data=output,
+                file_name="company_analysis_results.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
 def main():
     setup_page()
     
-    # Check for API key
     if not os.getenv("GROQ_API_KEY"):
         st.warning("Please set the GROQ_API_KEY environment variable in your Streamlit Cloud settings.")
     
-    # Input section
-    with st.form("company_analysis_form"):
-        company_url = st.text_input(
-            "Enter Company URL:",
-            placeholder="https://example.com",
-            help="Enter the full URL of the company website you want to analyze"
-        )
-        
-        # Model selection - updated with correct Groq model names
-        model_option = st.selectbox(
-            "Select Groq Model:",
-            [
-                "llama-3.3-70b-versatile",
-                "mixtral-8x7b-32768", 
-                "llama2-70b-4096", 
-                "gemma-7b-it",
-                "llama3-8b-8192",
-                "llama3-70b-8192"
-            ],
-            index=0
-        )
-        
-        submitted = st.form_submit_button("Analyze Company")
+    mode = st.radio("Choose Mode:", ["Single URL", "Bulk CSV"])
     
-    if submitted and company_url:
-        if not company_url.startswith('http'):
-            st.error("Please enter a valid URL including http:// or https://")
-            return
-            
-        with st.spinner("Analyzing company information. This may take a minute..."):
-            # Extract content
-            extracted_content, company_name = extract_website_content(company_url)
-            
-            if not extracted_content:
-                st.error("Failed to extract content from the website. Please check the URL and try again.")
-                return
-            
-            # Initialize state
-            initial_state = CompanyState(
-                company_url=company_url,
-                extracted_content=extracted_content,
-                company_name=company_name,
-                growth_initiatives=[],
-                it_issues=[],
-                industry_pain_points="",
-                company_pain_points="",
-                products_services="",
-                pitch="",
-                analysis_complete=False
+    if mode == "Single URL":
+        with st.form("company_analysis_form"):
+            company_url = st.text_input(
+                "Enter Company URL:",
+                placeholder="https://example.com",
+                help="Enter the full URL of the company website you want to analyze"
             )
             
-            # Run analysis
-            result = analyze_company_content(initial_state, model_option)
-            result["company_name"] = company_name
+            model_option = st.selectbox(
+                "Select Groq Model:",
+                ["mixtral-8x7b-32768", "llama2-70b-4096", "gemma-7b-it", "llama3-8b-8192", "llama3-70b-8192"],
+                index=0
+            )
             
-            # Display results
-            if result["analysis_complete"]:
-                display_results_table(result)
+            submitted = st.form_submit_button("Analyze Company")
+        
+        if submitted and company_url:
+            if not company_url.startswith('http'):
+                st.error("Please enter a valid URL including http:// or https://")
+                return
                 
-                # Add feedback section
-                st.markdown("---")
-                st.subheader("Feedback")
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    if st.button(" Useful Analysis"):
-                        st.success("Thanks for your feedback!")
-                with col2:
-                    if st.button(" Needs Improvement"):
-                        st.error("We'll work to improve our analysis.")
-                with col3:
-                    if st.button(" Analyze Another Company"):
-                        st.experimental_rerun()
-            else:
-                st.error("Analysis failed. Please try again with a different URL.")
+            with st.spinner("Analyzing company information. This may take a minute..."):
+                extracted_content, company_name = extract_website_content(company_url)
+                
+                if not extracted_content:
+                    st.error("Failed to extract content from the website. Please check the URL and try again.")
+                    return
+                
+                initial_state = CompanyState(
+                    company_url=company_url,
+                    extracted_content=extracted_content,
+                    company_name=company_name,
+                    growth_initiatives=[],
+                    it_issues=[],
+                    industry_pain_points="",
+                    company_pain_points="",
+                    products_services="",
+                    pitch="",
+                    analysis_complete=False
+                )
+                
+                result = analyze_company_content(initial_state, model_option)
+                result["company_name"] = company_name
+                
+                if result["analysis_complete"]:
+                    display_results(result)
+                else:
+                    st.error("Analysis failed. Please try again with a different URL.")
     
-    # Add sidebar with information
-    with st.sidebar:
-        st.header("About")
-        st.info("""
-        This tool analyzes company websites to identify opportunities for Sharp SSDI's solutions:
-        
-        - Document Management Systems (DMS)
-        - Contract Lifecycle Management (CLM)
-        - Process Automation
-        
-        Enter a company URL to get started.
-        """)
-        
-        st.header("Example URLs")
-        st.code("https://www.ab-inbev.com\nhttps://www.jindalaluminium.com\nhttps://www.lntvalves.com")
-        
-        st.header("Settings")
-        if st.button("Clear Analysis"):
-            st.experimental_rerun()
+    else:
+        bulk_analysis()
 
 if __name__ == "__main__":
     main()
