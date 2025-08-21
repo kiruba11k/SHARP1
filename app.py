@@ -266,7 +266,7 @@ def bulk_analysis():
     if uploaded_file is not None:
         df = pd.read_csv(uploaded_file)
 
-        if "website_url" not in df.columns:
+        if "website" not in df.columns:
             st.error("CSV must contain a column named 'website'")
             return
 
