@@ -1,16 +1,17 @@
 import streamlit as st
-import requests
-from bs4 import BeautifulSoup
-from typing import Dict, Any, List, TypedDict
-import os
-from groq import Groq
 import json
 import re
-import groq
+import os
 import pandas as pd
 from io import BytesIO
-from requests.adapters import HTTPAdapter, Retry
+from typing import Dict, List, TypedDict
+from groq import Groq
+import asyncio
+from playwright.async_api import async_playwright
 import random
+from requests.adapters import HTTPAdapter, Retry
+import requests
+from bs4 import BeautifulSoup
 
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 
@@ -26,119 +27,111 @@ class CompanyState(TypedDict):
     pitch: str
     analysis_complete: bool
 
+# ----------------- PAGE SETUP -----------------
 def setup_page():
-    st.set_page_config(
-        page_title="Sharp SSDI Company Analysis",
-        layout="wide"
-    )
-    st.title(" Sharp SSDI Company Analysis Agent")
+    st.set_page_config(page_title="Sharp SSDI Company Analysis", layout="wide")
+    st.title("Sharp SSDI Company Analysis Agent")
     st.markdown("""
     This tool analyzes company websites to extract key business insights and identify opportunities for Sharp SSDI's document management solutions.
     """)
 
-def extract_website_content(url: str) -> str:
-    """Extract text content from a company website with retries and better error handling"""
+# ----------------- PLAYWRIGHT SCRAPER -----------------
+async def scrape_with_playwright(url: str) -> (str, str):
     try:
-        # Ensure URL has a scheme
         if not url.startswith("http"):
             url = "https://" + url
 
-        headers_list = [
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115 Safari/537.36',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.6 Safari/605.1.15',
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113 Safari/537.36'
-        ]
-        headers = {'User-Agent': random.choice(headers_list)}
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117 Safari/537.36"
+            ))
+            page = await context.new_page()
+            await page.goto(url, timeout=60000, wait_until="networkidle")
+            await asyncio.sleep(3)
 
-        # Retry strategy
-        retry_strategy = Retry(
-            total=3,
-            backoff_factor=2,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["GET"]
-        )
+            text_content = await page.inner_text("body")
+            company_name = await page.title() or "Unknown"
+
+            await browser.close()
+
+        if len(text_content.strip()) < 500:
+            raise Exception("Content too short or page might be JS-heavy")
+
+        content = f"COMPANY NAME: {company_name}\n\n{text_content}"[:15000]
+        return content, company_name
+    except Exception:
+        return "", ""
+
+# ----------------- FALLBACK SCRAPER (Requests + BS4) -----------------
+def scrape_with_requests(url: str) -> (str, str):
+    try:
+        if not url.startswith("http"):
+            url = "https://" + url
+
+        headers = {
+            "User-Agent": random.choice([
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117 Safari/537.36',
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.6 Safari/605.1.15'
+            ])
+        }
+
+        retry_strategy = Retry(total=3, backoff_factor=2, status_forcelist=[429, 500, 502, 503, 504], allowed_methods=["GET"])
         adapter = HTTPAdapter(max_retries=retry_strategy)
         session = requests.Session()
         session.mount("http://", adapter)
         session.mount("https://", adapter)
 
-        try:
-            response = session.get(url, headers=headers, timeout=20)
-        except requests.exceptions.SSLError:
-            # Retry with HTTP if SSL fails
-            if url.startswith("https"):
-                url = url.replace("https", "http", 1)
-                response = session.get(url, headers=headers, timeout=20)
-            else:
-                raise
+        response = session.get(url, headers=headers, timeout=20)
 
         if response.status_code != 200:
-            raise Exception(f"Failed to fetch page (status {response.status_code})")
+            return "", ""
 
-        soup = BeautifulSoup(response.content, 'lxml')
+        soup = BeautifulSoup(response.content, "lxml")
+        company_name = soup.title.text.split("|")[0].split("-")[0].strip() if soup.title else "Unknown"
 
-        # Extract company name
-        company_name = ""
-        if soup.title:
-            company_name = soup.title.text.split('|')[0].split('-')[0].strip()
-
-        # Remove unwanted elements
         for element in soup(["script", "style", "nav", "footer", "header", "aside"]):
             element.decompose()
 
-        # Extract main content
-        main_content = ""
-        for tag in ['main', 'article', 'div[class*="content"]', 'div[class*="main"]']:
-            elements = soup.select(tag)
-            for element in elements:
-                main_content += element.get_text(separator=' ', strip=True) + " "
-
-        # Fallback to full body text
+        main_content = " ".join([e.get_text(" ", strip=True) for e in soup.select("main, article, div[class*='content'], div[class*='main']")])
         if not main_content:
             main_content = soup.get_text(separator=' ', strip=True)
 
-        # Validate content length
         if len(main_content) < 500:
-            raise Exception("Content too short or page might be JavaScript-heavy")
+            return "", ""
 
-        # Limit to 15k chars
         content = f"COMPANY NAME: {company_name}\n\n{main_content}"[:15000]
         return content, company_name
-
-    except Exception as e:
-        st.error(f"Error extracting content from {url}: {str(e)}")
+    except:
         return "", ""
-def analyze_with_groq(prompt: str, model: str = "llama-3.3-70B-Versatile") -> str:
-    """Use Groq API for analysis"""
-    try:
-        
-        client = Groq(api_key=GROQ_API_KEY)
 
-        
+# ----------------- MAIN EXTRACTION FUNCTION -----------------
+async def extract_website_content(url: str) -> (str, str):
+    content, name = await scrape_with_playwright(url)
+    if not content:
+        content, name = scrape_with_requests(url)
+    return content, name
+
+# ----------------- GROQ ANALYSIS -----------------
+def analyze_with_groq(prompt: str, model: str = "llama-3.3-70B-Versatile") -> str:
+    try:
+        client = Groq(api_key=GROQ_API_KEY)
         response = client.chat.completions.create(
             messages=[
-                {
-                    "role": "system",
-                    "content": "You are a business analyst expert at identifying document management and contract lifecycle opportunities."
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
+                {"role": "system", "content": "You are a business analyst expert at identifying document management and contract lifecycle opportunities."},
+                {"role": "user", "content": prompt}
             ],
             model=model,
             temperature=0.1,
             max_tokens=4000
         )
-        
         return response.choices[0].message.content
     except Exception as e:
         st.error(f"Groq API error: {str(e)}")
         return ""
 
 def analyze_company_content(state: CompanyState, model: str) -> CompanyState:
-    """Use Groq to analyze company content and extract required information"""
-    
     prompt = f"""
     Analyze the following company information and provide structured outputs:
 
@@ -171,8 +164,7 @@ def analyze_company_content(state: CompanyState, model: str) -> CompanyState:
     Format your response as JSON with the following structure:
     {{
         "growth_initiatives": [
-            {{"initiative": "summary text", "source": "url or source reference"}},
-            ... (3 items)
+            {{"initiative": "summary text", "source": "url or source reference"}}
         ],
         "it_issues": ["issue 1", "issue 2", "issue 3"],
         "industry_pain_points": "text here",
@@ -180,42 +172,14 @@ def analyze_company_content(state: CompanyState, model: str) -> CompanyState:
         "products_services": "text here",
         "pitch": "text here"
     }}
-    
-    Focus particularly on identifying opportunities for Document Management Systems (DMS) and 
-    Contract Lifecycle Management (CLM) solutions based on the company's pain points.
     """
-    
     try:
         response = analyze_with_groq(prompt, model)
-        
-        if not response:
-            return {
-                "growth_initiatives": [],
-                "it_issues": [],
-                "industry_pain_points": "",
-                "company_pain_points": "",
-                "products_services": "",
-                "pitch": "",
-                "analysis_complete": False
-            }
-        
-        # Clean the response to extract JSON
         json_match = re.search(r'\{.*\}', response, re.DOTALL)
-        
         if json_match:
             analysis = json.loads(json_match.group())
         else:
-            st.error("Failed to parse analysis results. Please try again.")
-            return {
-                "growth_initiatives": [],
-                "it_issues": [],
-                "industry_pain_points": "",
-                "company_pain_points": "",
-                "products_services": "",
-                "pitch": "",
-                "analysis_complete": False
-            }
-        
+            return {**state, "analysis_complete": False}
         return {
             "growth_initiatives": analysis.get("growth_initiatives", []),
             "it_issues": analysis.get("it_issues", []),
@@ -225,80 +189,42 @@ def analyze_company_content(state: CompanyState, model: str) -> CompanyState:
             "pitch": analysis.get("pitch", ""),
             "analysis_complete": True
         }
-        
-    except Exception as e:
-        st.error(f"Analysis error: {str(e)}")
-        return {
-            "growth_initiatives": [],
-            "it_issues": [],
-            "industry_pain_points": "",
-            "company_pain_points": "",
-            "products_services": "",
-            "pitch": "",
-            "analysis_complete": False
-        }
+    except:
+        return {**state, "analysis_complete": False}
 
+# ----------------- DISPLAY RESULTS -----------------
 def display_results(state: CompanyState):
-    """Display the analysis results in Streamlit"""
     st.header(f"Analysis Results for {state.get('company_name', 'the company')}")
-    
     tab1, tab2, tab3, tab4 = st.tabs(["Growth Initiatives", "IT Issues & Pain Points", "Opportunities", "Pitch Recommendation"])
-    
+
     with tab1:
-        st.subheader(" Growth/Transformation Initiatives")
+        st.subheader("Growth/Transformation Initiatives")
         for i, initiative in enumerate(state.get('growth_initiatives', []), 1):
-            col1, col2 = st.columns([4, 1])
-            with col1:
-                st.write(f"**{i}. {initiative.get('initiative', 'N/A')}**")
-            with col2:
-                source = initiative.get('source', '')
-                if source and source.startswith('http'):
-                    st.markdown(f"[Source]({source})", unsafe_allow_html=True)
-                elif source:
-                    st.caption(f"Source: {source}")
-    
+            st.write(f"**{i}. {initiative.get('initiative', 'N/A')}**")
+            if initiative.get('source'):
+                st.markdown(f"[Source]({initiative['source']})")
+
     with tab2:
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader(" IT-Related Issues")
-            for i, issue in enumerate(state.get('it_issues', []), 1):
-                st.write(f"{i}. {issue}")
-                
-        with col2:
-            st.subheader("Industry Pain Points")
-            st.info(state.get('industry_pain_points', 'No pain points identified'))
-    
+        st.subheader("IT-Related Issues")
+        for i, issue in enumerate(state.get('it_issues', []), 1):
+            st.write(f"{i}. {issue}")
+        st.subheader("Industry Pain Points")
+        st.info(state.get('industry_pain_points', 'No pain points identified'))
+
     with tab3:
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader(" Company Pain Points")
-            st.error(state.get('company_pain_points', 'No specific pain points identified'))
-            
-        with col2:
-            st.subheader(" Recommended Solutions")
-            st.success(state.get('products_services', 'No specific solutions identified'))
-    
+        st.subheader("Company Pain Points")
+        st.error(state.get('company_pain_points', 'No specific pain points identified'))
+        st.subheader("Recommended Solutions")
+        st.success(state.get('products_services', 'No specific solutions identified'))
+
     with tab4:
         st.subheader("Pitch Recommendation")
-        st.markdown("---")
         st.write(state.get('pitch', 'No pitch recommendation generated'))
-        st.markdown("---")
-        
-        if st.button(" Copy Pitch to Clipboard"):
-            st.code(state.get('pitch', ''), language=None)
-            st.success("Pitch copied to clipboard!")
 
-def bulk_analysis():
+# ----------------- BULK ANALYSIS -----------------
+async def bulk_analysis(model_option: str):
     st.subheader("Upload CSV with Website URLs")
     uploaded_file = st.file_uploader("Upload a CSV file", type=["csv"])
-    
-    model_option = st.selectbox(
-        "Select Groq Model:",
-        ["llama-3.3-70B-Versatile", "llama2-70b-4096", "gemma-7b-it", "llama3-8b-8192", "llama3-70b-8192"],
-        index=0
-    )
 
     if uploaded_file is not None:
         df = pd.read_csv(uploaded_file)
@@ -314,37 +240,15 @@ def bulk_analysis():
 
             for idx, row in df.iterrows():
                 url = row["website"]
-                if not url.startswith("http"):
-                    url = "https://" + url
-                
-                extracted_content, company_name = extract_website_content(url)
-                
+                extracted_content, company_name = await extract_website_content(url)
+
                 if not extracted_content:
-                    results.append({
-                        "Website URL": url,
-                        "Company Name": "",
-                        "Growth Initiatives": "",
-                        "IT Issues": "",
-                        "Industry Pain Points": "",
-                        "Company Pain Points": "",
-                        "Products/Services": "",
-                        "Pitch": "",
-                        "Source URL(s)": ""
-                    })
+                    results.append({"Website URL": url, "Company Name": "", "Pitch": ""})
                     continue
-                
-                state = CompanyState(
-                    company_url=url,
-                    extracted_content=extracted_content,
-                    company_name=company_name,
-                    growth_initiatives=[],
-                    it_issues=[],
-                    industry_pain_points="",
-                    company_pain_points="",
-                    products_services="",
-                    pitch="",
-                    analysis_complete=False
-                )
+
+                state = CompanyState(company_url=url, extracted_content=extracted_content, company_name=company_name,
+                                      growth_initiatives=[], it_issues=[], industry_pain_points="",
+                                      company_pain_points="", products_services="", pitch="", analysis_complete=False)
 
                 result = analyze_company_content(state, model_option)
                 result["company_name"] = company_name
@@ -365,7 +269,7 @@ def bulk_analysis():
                 })
 
                 progress_bar.progress((idx + 1) / total)
-            
+
             progress_bar.empty()
             result_df = pd.DataFrame(results)
 
@@ -377,72 +281,46 @@ def bulk_analysis():
                 result_df.to_excel(writer, index=False, sheet_name="Analysis Results")
             output.seek(0)
 
-            st.download_button(
-                label=" Download Excel",
-                data=output,
-                file_name="company_analysis_results.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+            st.download_button(label="Download Excel", data=output,
+                               file_name="company_analysis_results.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
+# ----------------- MAIN -----------------
 def main():
     setup_page()
-    
-    if not os.getenv("GROQ_API_KEY"):
-        st.warning("Please set the GROQ_API_KEY environment variable in your Streamlit Cloud settings.")
-    
     mode = st.radio("Choose Mode:", ["Single URL", "Bulk CSV"])
-    
+
+    model_option = st.selectbox("Select Groq Model:",
+                                 ["llama-3.3-70B-Versatile", "llama2-70b-4096", "gemma-7b-it", "llama3-8b-8192", "llama3-70b-8192"],
+                                 index=0)
+
     if mode == "Single URL":
         with st.form("company_analysis_form"):
-            company_url = st.text_input(
-                "Enter Company URL:",
-                placeholder="https://example.com",
-                help="Enter the full URL of the company website you want to analyze"
-            )
-            
-            model_option = st.selectbox(
-                "Select Groq Model:",
-                ["llama-3.3-70B-Versatile", "llama2-70b-4096", "gemma-7b-it", "llama3-8b-8192", "llama3-70b-8192"],
-                index=0
-            )
-            
+            company_url = st.text_input("Enter Company URL:", placeholder="https://example.com")
             submitted = st.form_submit_button("Analyze Company")
-        
+
         if submitted and company_url:
-            if not company_url.startswith('http'):
-                st.error("Please enter a valid URL including http:// or https://")
-                return
-                
-            with st.spinner("Analyzing company information. This may take a minute..."):
-                extracted_content, company_name = extract_website_content(company_url)
-                
+            with st.spinner("Analyzing company information..."):
+                extracted_content, company_name = asyncio.run(extract_website_content(company_url))
+
                 if not extracted_content:
-                    st.error("Failed to extract content from the website. Please check the URL and try again.")
+                    st.error("Failed to extract content from the website.")
                     return
-                
-                initial_state = CompanyState(
-                    company_url=company_url,
-                    extracted_content=extracted_content,
-                    company_name=company_name,
-                    growth_initiatives=[],
-                    it_issues=[],
-                    industry_pain_points="",
-                    company_pain_points="",
-                    products_services="",
-                    pitch="",
-                    analysis_complete=False
-                )
-                
+
+                initial_state = CompanyState(company_url=company_url, extracted_content=extracted_content,
+                                             company_name=company_name, growth_initiatives=[], it_issues=[],
+                                             industry_pain_points="", company_pain_points="", products_services="",
+                                             pitch="", analysis_complete=False)
+
                 result = analyze_company_content(initial_state, model_option)
                 result["company_name"] = company_name
-                
+
                 if result["analysis_complete"]:
                     display_results(result)
                 else:
-                    st.error("Analysis failed. Please try again with a different URL.")
-    
+                    st.error("Analysis failed. Try another URL.")
     else:
-        bulk_analysis()
+        asyncio.run(bulk_analysis(model_option))
 
 if __name__ == "__main__":
     main()
