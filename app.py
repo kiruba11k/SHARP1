@@ -13,6 +13,7 @@ import random
 from requests.adapters import HTTPAdapter, Retry
 import requests
 from bs4 import BeautifulSoup
+from urllib.parse import urljoin, urlparse
 
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 
@@ -38,7 +39,7 @@ def setup_page():
     """)
 
 # ----------------- PLAYWRIGHT SCRAPER -----------------
-async def scrape_with_playwright(url: str) -> (str, str):
+async def scrape_with_playwright(url: str) -> (str, str, List[Dict[str, str]]):
     try:
         if not url.startswith("http"):
             url = "https://" + url
@@ -55,6 +56,20 @@ async def scrape_with_playwright(url: str) -> (str, str):
 
             text_content = await page.inner_text("body")
             company_name = await page.title() or "Unknown"
+            
+            # Extract links with Playwright
+            links = await page.evaluate("""() => {
+                const links = [];
+                document.querySelectorAll('a[href]').forEach(a => {
+                    if (a.href && a.textContent.trim()) {
+                        links.push({
+                            text: a.textContent.trim(),
+                            url: a.href
+                        });
+                    }
+                });
+                return links;
+            }""")
 
             await browser.close()
 
@@ -62,9 +77,10 @@ async def scrape_with_playwright(url: str) -> (str, str):
             raise Exception("Content too short or page might be JS-heavy")
 
         content = f"COMPANY NAME: {company_name}\n\n{text_content}"[:15000]
-        return content, company_name
-    except Exception:
-        return "", ""
+        return content, company_name, links
+    except Exception as e:
+        print(f"Playwright error: {e}")
+        return "", "", []
 
 # ----------------- FALLBACK SCRAPER (Requests + BS4) -----------------
 def scrape_with_requests(url: str):
@@ -103,9 +119,10 @@ def scrape_with_requests(url: str):
             return "", "", []
 
         content = f"COMPANY NAME: {company_name}\n\n{main_content}"[:15000]
-        links = extract_links_and_text(soup)
+        links = extract_links_and_text(soup, url)
         return content, company_name, links
-    except:
+    except Exception as e:
+        print(f"Requests error: {e}")
         return "", "", []
 
 def normalize_url(url: str, base_url: str = "") -> str:
@@ -115,16 +132,17 @@ def normalize_url(url: str, base_url: str = "") -> str:
     if url.startswith("http://") or url.startswith("https://"):
         return url
     if url.startswith("/"):
-        return base_url.rstrip("/") + url  
-    return "https://" + url  
+        return urljoin(base_url, url)  
+    if url.startswith("#") or url.startswith("javascript:"):
+        return ""
+    return urljoin(base_url, "/" + url.lstrip("/"))
+
 # ----------------- MAIN EXTRACTION FUNCTION -----------------
 async def extract_website_content(url: str):
-    content, name = await scrape_with_playwright(url)
-    links = []
+    content, name, links = await scrape_with_playwright(url)
     if not content:
         content, name, links = scrape_with_requests(url)
     return content, name, links
-
 
 # ----------------- GROQ ANALYSIS -----------------
 def analyze_with_groq(prompt: str, model: str = "llama-3.3-70B-Versatile") -> str:
@@ -198,31 +216,68 @@ def analyze_company_content(state: CompanyState, model: str) -> CompanyState:
             analysis = json.loads(json_match.group())
             used_links = set()
 
+            # First pass: validate and use the sources provided by the model
+            for gi in analysis.get("growth_initiatives", []):
+                source = gi.get("source", "")
+                if source and source in [link["url"] for link in state["company_links"]]:
+                    used_links.add(source)
+                else:
+                    gi["source"] = ""  # Clear invalid sources
+
+            # Second pass: find best matches for initiatives without sources
             for gi in analysis.get("growth_initiatives", []):
                 if not gi.get("source"):
                     best_match = None
                     best_score = 0
+                    initiative_text = gi["initiative"].lower()
+                    
                     for link in state["company_links"]:
-                        score = sum(1 for word in gi["initiative"].split() if word.lower() in link["text"].lower())
-                        if score > best_score and link["url"] not in used_links:
+                        if link["url"] in used_links:
+                            continue
+                            
+                        # Calculate relevance score based on text similarity
+                        link_text = link["text"].lower()
+                        score = 0
+                        
+                        # Check for exact matches of important words
+                        important_words = ["growth", "initiative", "transform", "digital", "strategy", 
+                                         "expansion", "innovation", "project", "program", "invest"]
+                        
+                        for word in important_words:
+                            if word in initiative_text and word in link_text:
+                                score += 3
+                                
+                        # Check for shared words
+                        shared_words = set(initiative_text.split()) & set(link_text.split())
+                        score += len(shared_words)
+                        
+                        # Check if URL path contains relevant keywords
+                        parsed_url = urlparse(link["url"])
+                        path = parsed_url.path.lower()
+                        if any(word in path for word in ["blog", "news", "press", "media", "insights"]):
+                            score += 2
+                            
+                        if score > best_score:
                             best_score = score
                             best_match = link["url"]
+                    
                     if best_match:
                         gi["source"] = best_match
                         used_links.add(best_match)
 
+            return {
+                "growth_initiatives": analysis.get("growth_initiatives", []),
+                "it_issues": analysis.get("it_issues", []),
+                "industry_pain_points": analysis.get("industry_pain_points", ""),
+                "company_pain_points": analysis.get("company_pain_points", ""),
+                "products_services": analysis.get("products_services", ""),
+                "pitch": analysis.get("pitch", ""),
+                "analysis_complete": True
+            }
         else:
             return {**state, "analysis_complete": False}
-        return {
-            "growth_initiatives": analysis.get("growth_initiatives", []),
-            "it_issues": analysis.get("it_issues", []),
-            "industry_pain_points": analysis.get("industry_pain_points", ""),
-            "company_pain_points": analysis.get("company_pain_points", ""),
-            "products_services": analysis.get("products_services", ""),
-            "pitch": analysis.get("pitch", ""),
-            "analysis_complete": True
-        }
-    except:
+    except Exception as e:
+        st.error(f"Analysis error: {str(e)}")
         return {**state, "analysis_complete": False}
 
 # ----------------- DISPLAY RESULTS -----------------
@@ -236,10 +291,9 @@ def display_results(state: CompanyState):
             text = initiative.get('initiative', 'N/A')
             source = initiative.get('source', '')
             if source.startswith('http'):
-                st.markdown(f"**{i}. [{text}]({source})**")
+                st.markdown(f"**{i}. {text}** - [Source]({source})")
             else:
-                st.write(f"**{i}. {text}** (No valid link)")
-
+                st.write(f"**{i}. {text}** (No valid link found)")
 
     with tab2:
         st.subheader("IT-Related Issues")
@@ -258,19 +312,17 @@ def display_results(state: CompanyState):
         st.subheader("Pitch Recommendation")
         st.write(state.get('pitch', 'No pitch recommendation generated'))
 
-
-def extract_links_and_text(soup):
+def extract_links_and_text(soup, base_url):
     links = []
     for a in soup.find_all('a', href=True):
         text = a.get_text(" ", strip=True)
         href = a['href']
-        if href and text:
-            if href.startswith('/'):
-                href = "https://" + soup.find('meta', attrs={'property': 'og:url'})['content'].strip('/') + href
-            elif not href.startswith("http"):
-                href = "https://" + href.lstrip("/")
-            links.append({"text": text, "url": href})
+        if href and text and len(text) > 3:  # Filter out very short link texts
+            normalized_url = normalize_url(href, base_url)
+            if normalized_url and normalized_url.startswith("http"):
+                links.append({"text": text, "url": normalized_url})
     return links
+
 # ----------------- BULK ANALYSIS -----------------
 async def bulk_analysis(model_option: str):
     start_time = time.time()
@@ -288,57 +340,82 @@ async def bulk_analysis(model_option: str):
             results = []
             progress_bar = st.progress(0)
             total = len(df)
+            status_text = st.empty()
 
             for idx, row in df.iterrows():
                 url = row["website"]
-                extracted_content, company_name,links = await extract_website_content(url)
+                status_text.text(f"Processing {idx+1}/{total}: {url}")
+                
+                extracted_content, company_name, links = await extract_website_content(url)
 
                 if not extracted_content:
                     results.append({"Website URL": url, "Company Name": "", "Pitch": ""})
                     continue
 
-                state = CompanyState(company_url=url, extracted_content=extracted_content, company_name=company_name,
-                      company_links=links, growth_initiatives=[], it_issues=[], industry_pain_points="",
-                      company_pain_points="", products_services="", pitch="", analysis_complete=False)
-
+                state = CompanyState(
+                    company_url=url, 
+                    extracted_content=extracted_content, 
+                    company_name=company_name,
+                    company_links=links, 
+                    growth_initiatives=[], 
+                    it_issues=[], 
+                    industry_pain_points="",
+                    company_pain_points="", 
+                    products_services="", 
+                    pitch="", 
+                    analysis_complete=False
+                )
 
                 result = analyze_company_content(state, model_option)
                 result["company_name"] = company_name
 
-                growth_text = "; ".join([gi.get("initiative", "") for gi in result.get("growth_initiatives", [])])
-                sources_text = "; ".join([f'=HYPERLINK("{gi.get("source", "")}", "Source {i+1}")'for i, gi in enumerate(result.get("growth_initiatives", [])) if gi.get("source", "").startswith("http")])
+                # Prepare sources for Excel output
+                sources = []
+                for i, gi in enumerate(result.get("growth_initiatives", [])):
+                    source = gi.get("source", "")
+                    if source:
+                        sources.append(f'=HYPERLINK("{source}", "Source {i+1}")')
+                    else:
+                        sources.append("No source found")
+
                 results.append({
-                "Website URL": url,
-                "Company Name": company_name,
-                "Growth Initiatives": "; ".join([gi.get("initiative", "") for gi in result.get("growth_initiatives", [])]),
-                "IT Issues": "; ".join(result.get("it_issues", [])),
-                "Industry Pain Points": result.get("industry_pain_points", ""),
-                "Company Pain Points": result.get("company_pain_points", ""),
-                "Products/Services": result.get("products_services", ""),
-                "Pitch": result.get("pitch", ""),
-                "Source URL(s)": "; ".join([f'<a href="{gi.get("source", "")}" target="_blank">Source {i+1}</a>'for i, gi in enumerate(result.get("growth_initiatives", [])) if gi.get("source", "").startswith("http")])
+                    "Website URL": url,
+                    "Company Name": company_name,
+                    "Growth Initiatives": "; ".join([gi.get("initiative", "") for gi in result.get("growth_initiatives", [])]),
+                    "IT Issues": "; ".join(result.get("it_issues", [])),
+                    "Industry Pain Points": result.get("industry_pain_points", ""),
+                    "Company Pain Points": result.get("company_pain_points", ""),
+                    "Products/Services": result.get("products_services", ""),
+                    "Pitch": result.get("pitch", ""),
+                    "Source URLs": "; ".join(sources)
                 })
+                
                 progress_bar.progress((idx + 1) / total)
 
             progress_bar.empty()
+            status_text.empty()
+            
             result_df = pd.DataFrame(results)
 
             st.subheader("Analysis Results")
-            st.write(result_df.to_html(escape=False), unsafe_allow_html=True)
-
+            st.dataframe(result_df)
 
             output = BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
                 result_df.to_excel(writer, index=False, sheet_name="Analysis Results")
             output.seek(0)
+            
             end_time = time.time()
             elapsed_time = end_time - start_time
             minutes, seconds = divmod(elapsed_time, 60)
-            st.success(f" Analysis completed in {int(minutes)} min {int(seconds)} sec")
+            st.success(f"Analysis completed in {int(minutes)} min {int(seconds)} sec")
 
-            st.download_button(label="Download Excel", data=output,
-                               file_name="company_analysis_results.xlsx",
-                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            st.download_button(
+                label="Download Excel", 
+                data=output,
+                file_name="company_analysis_results.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
 # ----------------- MAIN -----------------
 def main():
@@ -356,17 +433,25 @@ def main():
 
         if submitted and company_url:
             with st.spinner("Analyzing company information..."):
-                extracted_content, company_name,links = asyncio.run(extract_website_content(company_url))
+                extracted_content, company_name, links = asyncio.run(extract_website_content(company_url))
 
                 if not extracted_content:
                     st.error("Failed to extract content from the website.")
                     return
 
-                initial_state = CompanyState(company_url=company_url, extracted_content=extracted_content,
-                             company_name=company_name, company_links=links,
-                             growth_initiatives=[], it_issues=[],
-                             industry_pain_points="", company_pain_points="", products_services="",
-                             pitch="", analysis_complete=False)
+                initial_state = CompanyState(
+                    company_url=company_url, 
+                    extracted_content=extracted_content,
+                    company_name=company_name, 
+                    company_links=links,
+                    growth_initiatives=[], 
+                    it_issues=[],
+                    industry_pain_points="", 
+                    company_pain_points="", 
+                    products_services="",
+                    pitch="", 
+                    analysis_complete=False
+                )
 
                 result = analyze_company_content(initial_state, model_option)
                 result["company_name"] = company_name
