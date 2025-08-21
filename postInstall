@@ -1,2 +1,0 @@
-playwright install chromium
-chmod +x postInstall
