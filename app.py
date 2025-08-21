@@ -274,15 +274,16 @@ async def bulk_analysis(model_option: str):
 
             for idx, row in df.iterrows():
                 url = row["website"]
-                extracted_content, company_name = await extract_website_content(url)
+                extracted_content, company_name,links = await extract_website_content(url)
 
                 if not extracted_content:
                     results.append({"Website URL": url, "Company Name": "", "Pitch": ""})
                     continue
 
                 state = CompanyState(company_url=url, extracted_content=extracted_content, company_name=company_name,
-                                      growth_initiatives=[], it_issues=[], industry_pain_points="",
-                                      company_pain_points="", products_services="", pitch="", analysis_complete=False)
+                      company_links=links, growth_initiatives=[], it_issues=[], industry_pain_points="",
+                      company_pain_points="", products_services="", pitch="", analysis_complete=False)
+
 
                 result = analyze_company_content(state, model_option)
                 result["company_name"] = company_name
@@ -338,16 +339,17 @@ def main():
 
         if submitted and company_url:
             with st.spinner("Analyzing company information..."):
-                extracted_content, company_name = asyncio.run(extract_website_content(company_url))
+                extracted_content, company_name,links = asyncio.run(extract_website_content(company_url))
 
                 if not extracted_content:
                     st.error("Failed to extract content from the website.")
                     return
 
                 initial_state = CompanyState(company_url=company_url, extracted_content=extracted_content,
-                                             company_name=company_name, growth_initiatives=[], it_issues=[],
-                                             industry_pain_points="", company_pain_points="", products_services="",
-                                             pitch="", analysis_complete=False)
+                             company_name=company_name, company_links=links,
+                             growth_initiatives=[], it_issues=[],
+                             industry_pain_points="", company_pain_points="", products_services="",
+                             pitch="", analysis_complete=False)
 
                 result = analyze_company_content(initial_state, model_option)
                 result["company_name"] = company_name
