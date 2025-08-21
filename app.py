@@ -159,7 +159,9 @@ def analyze_company_content(state: CompanyState, model: str) -> CompanyState:
     1. Growth/Transformation Initiatives (last 6 months):
     - Identify top 3 priority initiatives
     - Summarize each in one crisp line
-    - Include a hyperlink to the source (if available in content)
+    - For each growth initiative, set "source" to the most relevant URL from AVAILABLE LINKS.
+    - Only use URLs from AVAILABLE LINKS (do NOT make up links).
+    - If none match, leave "source" as an empty string.
 
     2. Top 3 IT-Related Issues (last 6 months):
     - Summarize any reported IT problems or incidents
@@ -194,6 +196,13 @@ def analyze_company_content(state: CompanyState, model: str) -> CompanyState:
         json_match = re.search(r'\{.*\}', response, re.DOTALL)
         if json_match:
             analysis = json.loads(json_match.group())
+
+            for gi in analysis.get("growth_initiatives", []):
+                if not gi.get("source"):  # Only if Groq didn't assign a source
+                    for link in state["company_links"]:
+                i        f any(word.lower() in link["text"].lower() for word in gi["initiative"].split()):
+                            gi["source"] = link["url"]
+                            break
         else:
             return {**state, "analysis_complete": False}
         return {
