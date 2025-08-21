@@ -246,7 +246,8 @@ def analyze_company_content(state: CompanyState, model: str) -> CompanyState:
                         best_score = score
                         best_match = link["url"]
                         
-                 if best_match and best_score > 2:  # Only use if score is above threshold
+                        
+                if best_match and best_score > 2:  # Only use if score is above threshold
                     gi["source"] = best_match
                     used_links.add(best_match)
 
