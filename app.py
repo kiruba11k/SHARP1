@@ -107,6 +107,16 @@ def scrape_with_requests(url: str) -> (str, str):
     except:
         return "", ""
 
+
+def normalize_url(url: str, base_url: str = "") -> str:
+    if not url:
+        return ""
+    url = url.strip()
+    if url.startswith("http://") or url.startswith("https://"):
+        return url
+    if url.startswith("/"):
+        return base_url.rstrip("/") + url  
+    return "https://" + url  
 # ----------------- MAIN EXTRACTION FUNCTION -----------------
 async def extract_website_content(url: str) -> (str, str):
     content, name = await scrape_with_playwright(url)
@@ -202,9 +212,9 @@ def display_results(state: CompanyState):
         st.subheader("Growth/Transformation Initiatives")
         for i, initiative in enumerate(state.get('growth_initiatives', []), 1):
             text = initiative.get('initiative', 'N/A')
-            source = initiative.get('source')
+            source = normalize_url(initiative.get('source'))
             if source:
-                st.markdown(f"**{i}. [{text}]({source})**")  
+                st.markdown(f"**{i}. [{text}]({source})**")
             else:
                 st.write(f"**{i}. {text}**")
 
@@ -261,7 +271,7 @@ async def bulk_analysis(model_option: str):
                 result["company_name"] = company_name
 
                 growth_text = "; ".join([gi.get("initiative", "") for gi in result.get("growth_initiatives", [])])
-                sources_text = "; ".join([ f'=HYPERLINK("{gi.get("source", "")}", "Source {i+1}")' for i, gi in enumerate(result.get("growth_initiatives", [])) if gi.get("source")])
+                sources_text = "; ".join([f'=HYPERLINK("{normalize_url(gi.get("source", ""))}", "Source {i+1}")'for i, gi in enumerate(result.get("growth_initiatives", [])) if gi.get("source")])
 
                 results.append({
                 "Website URL": url,
@@ -272,8 +282,7 @@ async def bulk_analysis(model_option: str):
                 "Company Pain Points": result.get("company_pain_points", ""),
                 "Products/Services": result.get("products_services", ""),
                 "Pitch": result.get("pitch", ""),
-                "Source URL(s)": "; ".join([f'<a href="{gi.get("source", "#")}" target="_blank">Source {i+1}</a>' for i, gi in enumerate(result.get("growth_initiatives", [])) if gi.get("source")])
-
+                "Source URL(s)": "; ".join([f'<a href="{normalize_url(gi.get("source", ""))}" target="_blank">Source {i+1}</a>'for i, gi in enumerate(result.get("growth_initiatives", [])) if gi.get("source")])
                 })
 
                 progress_bar.progress((idx + 1) / total)
