@@ -71,7 +71,7 @@ def extract_website_content(url: str) -> str:
         st.error(f"Error extracting content: {str(e)}")
         return "", ""
 
-def analyze_with_groq(prompt: str, model: str = "mixtral-8x7b-32768") -> str:
+def analyze_with_groq(prompt: str, model: str = "llama-3.3-70B-Versatile") -> str:
     """Use Groq API for analysis"""
     try:
         
@@ -259,7 +259,7 @@ def bulk_analysis():
     
     model_option = st.selectbox(
         "Select Groq Model:",
-        ["mixtral-8x7b-32768", "llama2-70b-4096", "gemma-7b-it", "llama3-8b-8192", "llama3-70b-8192"],
+        ["llama-3.3-70B-Versatile", "llama2-70b-4096", "gemma-7b-it", "llama3-8b-8192", "llama3-70b-8192"],
         index=0
     )
 
