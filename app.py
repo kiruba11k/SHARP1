@@ -413,7 +413,7 @@ async def bulk_analysis(model_option: str):
                 for i, gi in enumerate(result.get("growth_initiatives", [])):
                     source = gi.get("source", "")
                     if source:
-                        source_urls.append(source)
+                        sources.append(source)
                     else:
                         sources.append("No source found")
 
