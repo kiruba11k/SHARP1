@@ -196,13 +196,21 @@ def analyze_company_content(state: CompanyState, model: str) -> CompanyState:
         json_match = re.search(r'\{.*\}', response, re.DOTALL)
         if json_match:
             analysis = json.loads(json_match.group())
+            used_links = set()
 
             for gi in analysis.get("growth_initiatives", []):
-                if not gi.get("source"):  # Only if Groq didn't assign a source
+                if not gi.get("source"):
+                    best_match = None
+                    best_score = 0
                     for link in state["company_links"]:
-                i        f any(word.lower() in link["text"].lower() for word in gi["initiative"].split()):
-                            gi["source"] = link["url"]
-                            break
+                        score = sum(1 for word in gi["initiative"].split() if word.lower() in link["text"].lower())
+                        if score > best_score and link["url"] not in used_links:
+                            best_score = score
+                            best_match = link["url"]
+                    if best_match:
+                        gi["source"] = best_match
+                        used_links.add(best_match)
+
         else:
             return {**state, "analysis_complete": False}
         return {
