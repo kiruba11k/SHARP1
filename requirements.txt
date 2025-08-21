@@ -11,4 +11,3 @@ groq
 pyperclip
 openpyxl
 playwright
-playwright-browsers
