@@ -1,0 +1,4 @@
+libnss3
+libatk-bridge
+libxkbcommon0
+libgtk
