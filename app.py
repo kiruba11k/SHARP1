@@ -201,9 +201,12 @@ def display_results(state: CompanyState):
     with tab1:
         st.subheader("Growth/Transformation Initiatives")
         for i, initiative in enumerate(state.get('growth_initiatives', []), 1):
-            st.write(f"**{i}. {initiative.get('initiative', 'N/A')}**")
-            if initiative.get('source'):
-                st.markdown(f"[Source]({initiative['source']})")
+            text = initiative.get('initiative', 'N/A')
+            source = initiative.get('source')
+            if source:
+                st.markdown(f"**{i}. [{text}]({source})**")  
+            else:
+                st.write(f"**{i}. {text}**")
 
     with tab2:
         st.subheader("IT-Related Issues")
@@ -269,7 +272,8 @@ async def bulk_analysis(model_option: str):
                 "Company Pain Points": result.get("company_pain_points", ""),
                 "Products/Services": result.get("products_services", ""),
                 "Pitch": result.get("pitch", ""),
-                "Source URL(s)": sources_text
+                "Source URL(s)": "; ".join([f'<a href="{gi.get("source", "#")}" target="_blank">Source {i+1}</a>' for i, gi in enumerate(result.get("growth_initiatives", [])) if gi.get("source")])
+
                 })
 
                 progress_bar.progress((idx + 1) / total)
@@ -278,7 +282,8 @@ async def bulk_analysis(model_option: str):
             result_df = pd.DataFrame(results)
 
             st.subheader("Analysis Results")
-            st.dataframe(result_df)
+            st.write(result_df.to_html(escape=False), unsafe_allow_html=True)
+
 
             output = BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
