@@ -267,7 +267,7 @@ def bulk_analysis():
         df = pd.read_csv(uploaded_file)
 
         if "website_url" not in df.columns:
-            st.error("CSV must contain a column named 'website_url'")
+            st.error("CSV must contain a column named 'website'")
             return
 
         if st.button("Start Bulk Analysis"):
@@ -276,7 +276,7 @@ def bulk_analysis():
             total = len(df)
 
             for idx, row in df.iterrows():
-                url = row["website_url"]
+                url = row["website"]
                 if not url.startswith("http"):
                     url = "https://" + url
                 
