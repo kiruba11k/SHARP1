@@ -9,6 +9,8 @@ import re
 import groq
 import pandas as pd
 from io import BytesIO
+from requests.adapters import HTTPAdapter, Retry
+import random
 
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 
@@ -35,42 +37,77 @@ def setup_page():
     """)
 
 def extract_website_content(url: str) -> str:
-    """Extract text content from a company website with improved parsing"""
+    """Extract text content from a company website with retries and better error handling"""
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        response = requests.get(url, headers=headers, timeout=15)
+        # Ensure URL has a scheme
+        if not url.startswith("http"):
+            url = "https://" + url
+
+        headers_list = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.6 Safari/605.1.15',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113 Safari/537.36'
+        ]
+        headers = {'User-Agent': random.choice(headers_list)}
+
+        # Retry strategy
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=2,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET"]
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session = requests.Session()
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+
+        try:
+            response = session.get(url, headers=headers, timeout=20)
+        except requests.exceptions.SSLError:
+            # Retry with HTTP if SSL fails
+            if url.startswith("https"):
+                url = url.replace("https", "http", 1)
+                response = session.get(url, headers=headers, timeout=20)
+            else:
+                raise
+
+        if response.status_code != 200:
+            raise Exception(f"Failed to fetch page (status {response.status_code})")
+
         soup = BeautifulSoup(response.content, 'lxml')
-        
-        # Extract company name from title or h1
+
+        # Extract company name
         company_name = ""
         if soup.title:
             company_name = soup.title.text.split('|')[0].split('-')[0].strip()
-        
+
         # Remove unwanted elements
         for element in soup(["script", "style", "nav", "footer", "header", "aside"]):
             element.decompose()
-            
-        # Prioritize main content areas
+
+        # Extract main content
         main_content = ""
         for tag in ['main', 'article', 'div[class*="content"]', 'div[class*="main"]']:
             elements = soup.select(tag)
             for element in elements:
                 main_content += element.get_text(separator=' ', strip=True) + " "
-        
-        # If no main content found, use body
+
+        # Fallback to full body text
         if not main_content:
             main_content = soup.get_text(separator=' ', strip=True)
-            
-        # Limit to first 15k characters to avoid token limits but preserve more content
+
+        # Validate content length
+        if len(main_content) < 500:
+            raise Exception("Content too short or page might be JavaScript-heavy")
+
+        # Limit to 15k chars
         content = f"COMPANY NAME: {company_name}\n\n{main_content}"[:15000]
         return content, company_name
-        
-    except Exception as e:
-        st.error(f"Error extracting content: {str(e)}")
-        return "", ""
 
+    except Exception as e:
+        st.error(f"Error extracting content from {url}: {str(e)}")
+        return "", ""
 def analyze_with_groq(prompt: str, model: str = "llama-3.3-70B-Versatile") -> str:
     """Use Groq API for analysis"""
     try:
