@@ -3,7 +3,7 @@ import requests
 from bs4 import BeautifulSoup
 from typing import Dict, Any, List, TypedDict
 import os
-from dotenv import load_dotenv
+from groq import Groq
 import json
 import re
 import groq
