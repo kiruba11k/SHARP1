@@ -145,7 +145,7 @@ async def extract_website_content(url: str):
     return content, name, links
 
 # ----------------- GROQ ANALYSIS -----------------
-def analyze_with_groq(prompt: str, model: str = "llama-3.3-70B-Versatile") -> str:
+def analyze_with_groq(prompt: str, model: str = "llama-3.1-8b-instant") -> str:
     try:
         client = Groq(api_key=GROQ_API_KEY)
         response = client.chat.completions.create(
@@ -463,7 +463,7 @@ def main():
     mode = st.radio("Choose Mode:", ["Single URL", "Bulk CSV"])
 
     model_option = st.selectbox("Select Groq Model:",
-                                 ["llama-3.3-70B-Versatile", "llama2-70b-4096", "gemma-7b-it", "llama3-8b-8192", "llama3-70b-8192"],
+                                 ["llama-3.3-70B-Versatile", "llama-3.1-8b-instant", "gemma-7b-it", "llama3-8b-8192", "llama3-70b-8192"],
                                  index=0)
 
     if mode == "Single URL":
