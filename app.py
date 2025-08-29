@@ -362,6 +362,66 @@ def extract_links_and_text(soup, base_url):
     
     return links
 
+
+# Fetch recent news using Google News RSS
+def fetch_recent_news(company_name: str, months: int = 6, max_results: int = 5) -> List[str]:
+    try:
+        query = company_name.replace(" ", "+")
+        url = f"https://news.google.com/rss/search?q={query}+when:{months}m&hl=en-IN&gl=IN&ceid=IN:en"
+        
+        response = requests.get(url, timeout=15)
+        if response.status_code != 200:
+            return []
+
+        soup = BeautifulSoup(response.content, "xml")
+        items = soup.find_all("item")[:max_results]
+
+        news_list = []
+        for item in items:
+            title = item.title.text
+            description = item.description.text if item.description else ""
+            link = item.link.text
+            news_list.append(f"Title: {title}\nDescription: {description}\nURL: {link}")
+
+        return news_list
+    except Exception as e:
+        print(f"News fetch error: {e}")
+        return []
+
+# Summarize news and structure into JSON matching main output
+def summarize_and_structure_news(news_list: List[str]) -> Dict:
+    if not news_list:
+        return {}
+
+    news_text = "\n\n".join(news_list)
+    prompt = f"""
+    Based on the following company news from the last 6 months, extract key business insights.
+
+    NEWS CONTENT:
+    {news_text}
+
+    Provide JSON with this format:
+    {{
+        "growth_initiatives": [
+            {{"initiative": "summary text"}}
+        ],
+        "it_issues": ["issue 1", "issue 2"],
+        "industry_pain_points": "short text",
+        "company_pain_points": "short text",
+        "products_services": "short text",
+        "pitch": "short tailored pitch"
+    }}
+    """
+
+    raw_response = analyze_with_groq(prompt)
+    json_match = re.search(r'\{.*\}', raw_response, re.DOTALL)
+    if json_match:
+        try:
+            return json.loads(json_match.group())
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
 # ----------------- BULK ANALYSIS -----------------
 async def bulk_analysis(model_option: str):
     start_time = time.time()
@@ -388,8 +448,39 @@ async def bulk_analysis(model_option: str):
                 extracted_content, company_name, links = await extract_website_content(url)
 
                 if not extracted_content:
-                    results.append({"Website URL": url, "Company Name": "", "Pitch": ""})
+    # Fallback: Use news-based analysis
+                    company_name_fallback = row.get("company_name", "") or url.split("//")[-1].split("/")[0]
+                    news_list = fetch_recent_news(company_name_fallback)
+
+                    if news_list:
+                        news_analysis = summarize_and_structure_news(news_list)
+                        sources = [n.split("URL: ")[-1] for n in news_list]
+
+                        results.append({
+                            "Website URL": url,
+            "Company Name": company_name_fallback,
+            "Growth Initiatives": "; ".join([gi.get("initiative", "") for gi in news_analysis.get("growth_initiatives", [])]) or "No data",
+            "IT Issues": "; ".join(news_analysis.get("it_issues", [])) or "No data",
+            "Industry Pain Points": news_analysis.get("industry_pain_points", "") or "No data",
+            "Company Pain Points": news_analysis.get("company_pain_points", "") or "No data",
+            "Products/Services": news_analysis.get("products_services", "") or "No data",
+            "Pitch": news_analysis.get("pitch", "") or "No data",
+            "Source URLs": "; ".join(sources)
+                        })
+                    else:
+                        results.append({
+                            "Website URL": url,
+            "Company Name": company_name_fallback,
+            "Growth Initiatives": "No data",
+            "IT Issues": "No data",
+            "Industry Pain Points": "No data",
+            "Company Pain Points": "No data",
+            "Products/Services": "No data",
+            "Pitch": "No data",
+            "Source URLs": "No sources found"
+                        })
                     continue
+
 
                 state = CompanyState(
                     company_url=url, 
