@@ -435,8 +435,18 @@ async def bulk_analysis(model_option: str):
             st.error("CSV must contain a column named 'website'")
             return
 
+        #  Output CSV file path
+        output_csv_path = "company_analysis_results.csv"
+
+        # Create CSV with headers once
+        columns = [
+            "Website URL", "Company Name", "Growth Initiatives", "IT Issues",
+            "Industry Pain Points", "Company Pain Points", "Products/Services",
+            "Pitch", "Source URLs"
+        ]
+        pd.DataFrame(columns=columns).to_csv(output_csv_path, index=False)
+
         if st.button("Start Bulk Analysis"):
-            results = []
             progress_bar = st.progress(0)
             total = len(df)
             status_text = st.empty()
@@ -444,11 +454,11 @@ async def bulk_analysis(model_option: str):
             for idx, row in df.iterrows():
                 url = row["website"]
                 status_text.text(f"Processing {idx+1}/{total}: {url}")
-                
+
                 extracted_content, company_name, links = await extract_website_content(url)
 
                 if not extracted_content:
-    # Fallback: Use news-based analysis
+                    #  Fallback: Use news-based analysis
                     company_name_fallback = row.get("company_name", "") or url.split("//")[-1].split("/")[0]
                     news_list = fetch_recent_news(company_name_fallback)
 
@@ -456,97 +466,93 @@ async def bulk_analysis(model_option: str):
                         news_analysis = summarize_and_structure_news(news_list)
                         sources = [n.split("URL: ")[-1] for n in news_list]
 
-                        results.append({
+                        result_dict = {
                             "Website URL": url,
-            "Company Name": company_name_fallback,
-            "Growth Initiatives": "; ".join([gi.get("initiative", "") for gi in news_analysis.get("growth_initiatives", [])]) or "No data",
-            "IT Issues": "; ".join(news_analysis.get("it_issues", [])) or "No data",
-            "Industry Pain Points": news_analysis.get("industry_pain_points", "") or "No data",
-            "Company Pain Points": news_analysis.get("company_pain_points", "") or "No data",
-            "Products/Services": news_analysis.get("products_services", "") or "No data",
-            "Pitch": news_analysis.get("pitch", "") or "No data",
-            "Source URLs": "; ".join(sources)
-                        })
+                            "Company Name": company_name_fallback,
+                            "Growth Initiatives": "; ".join([gi.get("initiative", "") for gi in news_analysis.get("growth_initiatives", [])]) or "No data",
+                            "IT Issues": "; ".join(news_analysis.get("it_issues", [])) or "No data",
+                            "Industry Pain Points": news_analysis.get("industry_pain_points", "") or "No data",
+                            "Company Pain Points": news_analysis.get("company_pain_points", "") or "No data",
+                            "Products/Services": news_analysis.get("products_services", "") or "No data",
+                            "Pitch": news_analysis.get("pitch", "") or "No data",
+                            "Source URLs": "; ".join(sources)
+                        }
                     else:
-                        results.append({
+                        result_dict = {
                             "Website URL": url,
-            "Company Name": company_name_fallback,
-            "Growth Initiatives": "No data",
-            "IT Issues": "No data",
-            "Industry Pain Points": "No data",
-            "Company Pain Points": "No data",
-            "Products/Services": "No data",
-            "Pitch": "No data",
-            "Source URLs": "No sources found"
-                        })
-                    continue
+                            "Company Name": company_name_fallback,
+                            "Growth Initiatives": "No data",
+                            "IT Issues": "No data",
+                            "Industry Pain Points": "No data",
+                            "Company Pain Points": "No data",
+                            "Products/Services": "No data",
+                            "Pitch": "No data",
+                            "Source URLs": "No sources found"
+                        }
+                else:
+                    #  Normal analysis
+                    state = CompanyState(
+                        company_url=url,
+                        extracted_content=extracted_content,
+                        company_name=company_name,
+                        company_links=links,
+                        growth_initiatives=[],
+                        it_issues=[],
+                        industry_pain_points="",
+                        company_pain_points="",
+                        products_services="",
+                        pitch="",
+                        analysis_complete=False
+                    )
 
+                    result = analyze_company_content(state, model_option)
+                    result["company_name"] = company_name
 
-                state = CompanyState(
-                    company_url=url, 
-                    extracted_content=extracted_content, 
-                    company_name=company_name,
-                    company_links=links, 
-                    growth_initiatives=[], 
-                    it_issues=[], 
-                    industry_pain_points="",
-                    company_pain_points="", 
-                    products_services="", 
-                    pitch="", 
-                    analysis_complete=False
-                )
+                    sources = []
+                    for gi in result.get("growth_initiatives", []):
+                        source = gi.get("source", "")
+                        sources.append(source if source else "No source found")
 
-                result = analyze_company_content(state, model_option)
-                result["company_name"] = company_name
+                    result_dict = {
+                        "Website URL": url,
+                        "Company Name": company_name,
+                        "Growth Initiatives": "; ".join([gi.get("initiative", "") for gi in result.get("growth_initiatives", [])]),
+                        "IT Issues": "; ".join(result.get("it_issues", [])),
+                        "Industry Pain Points": result.get("industry_pain_points", ""),
+                        "Company Pain Points": result.get("company_pain_points", ""),
+                        "Products/Services": result.get("products_services", ""),
+                        "Pitch": result.get("pitch", ""),
+                        "Source URLs": "; ".join(sources)
+                    }
 
-                # Prepare sources for Excel output
-                sources = []
-                for i, gi in enumerate(result.get("growth_initiatives", [])):
-                    source = gi.get("source", "")
-                    if source:
-                        sources.append(source)
-                    else:
-                        sources.append("No source found")
+                # Append result to CSV after each iteration
+                pd.DataFrame([result_dict]).to_csv(output_csv_path, mode='a', index=False, header=False)
 
-                
-                results.append({
-                    "Website URL": url,
-                    "Company Name": company_name,
-                    "Growth Initiatives": "; ".join([gi.get("initiative", "") for gi in result.get("growth_initiatives", [])]),
-                    "IT Issues": "; ".join(result.get("it_issues", [])),
-                    "Industry Pain Points": result.get("industry_pain_points", ""),
-                    "Company Pain Points": result.get("company_pain_points", ""),
-                    "Products/Services": result.get("products_services", ""),
-                    "Pitch": result.get("pitch", ""),
-                    "Source URLs": "; ".join(sources)
-                })
-                
                 progress_bar.progress((idx + 1) / total)
 
             progress_bar.empty()
             status_text.empty()
-            
-            result_df = pd.DataFrame(results)
 
-            st.subheader("Analysis Results")
-            st.dataframe(result_df)
-
-            output = BytesIO()
-            with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                result_df.to_excel(writer, index=False, sheet_name="Analysis Results")
-            output.seek(0)
-            
+            #  Display message and download button
             end_time = time.time()
             elapsed_time = end_time - start_time
             minutes, seconds = divmod(elapsed_time, 60)
             st.success(f"Analysis completed in {int(minutes)} min {int(seconds)} sec")
 
-            st.download_button(
-                label="Download Excel", 
-                data=output,
-                file_name="company_analysis_results.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+            #  Read the CSV back for display
+            final_df = pd.read_csv(output_csv_path)
+            st.subheader("Analysis Results")
+            st.dataframe(final_df)
+
+            #  Download button
+            with open(output_csv_path, "rb") as f:
+                st.download_button(
+                    label="Download CSV",
+                    data=f,
+                    file_name="company_analysis_results.csv",
+                    mime="text/csv"
+                )
+
 
 # ----------------- MAIN -----------------
 def main():
