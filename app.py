@@ -14,6 +14,7 @@ from requests.adapters import HTTPAdapter, Retry
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
+from gnews import GNews
 
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 
@@ -388,25 +389,12 @@ def fetch_recent_news_rss(company_name: str, months: int = 6, max_results: int =
         print(f"News fetch error: {e}")
         return []
 
-def fetch_news_gnews_api(company_name: str, max_results: int = 5) -> List[str]:
-    """Fetch company updates via GNews API (recent)"""
-    api_key = st.secrets["NEWS_API_KEY"]
-    base_url = "https://gnews.io/api/v4/search"
-    params = {
-        "q": company_name,
-        "token": api_key,
-        "lang": "en",
-        "max": max_results,
-        "sortby": "publishedAt"
-    }
 
+def fetch_news_gnews_lib(company_name: str, max_results: int = 5) -> List[str]:
+    """Fetch company updates using the GNews Python library (no API key needed)."""
     try:
-        response = requests.get(base_url, params=params, timeout=10)
-        if response.status_code != 200:
-            return []
-
-        data = response.json()
-        articles = data.get("articles", [])
+        google_news = GNews(language='en', country='US', max_results=max_results)
+        articles = google_news.get_news(company_name)
 
         news_list = []
         for article in articles:
@@ -417,7 +405,7 @@ def fetch_news_gnews_api(company_name: str, max_results: int = 5) -> List[str]:
                 news_list.append(f"Title: {title}\nDescription: {description}\nURL: {url}")
         return news_list
     except Exception as e:
-        print(f"GNews API error for {company_name}: {e}")
+        print(f"GNews library error for {company_name}: {e}")
         return []
 
 
@@ -425,7 +413,7 @@ def fetch_news_with_fallbacks(company_name: str, months: int = 6, max_results: i
     """Try fetching news via RSS first, then fall back to GNews API"""
     news = fetch_recent_news_rss(company_name, months, max_results)
     if not news:
-        news = fetch_news_gnews_api(company_name, max_results)
+        news = fetch_news_gnews_lib(company_name, max_results)
     return news
 # Summarize news and structure into JSON matching main output
 def summarize_and_structure_news(news_list: List[str]) -> Dict:
