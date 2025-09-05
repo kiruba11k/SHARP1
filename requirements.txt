@@ -11,3 +11,4 @@ groq
 pyperclip
 openpyxl
 playwright
+gnews
