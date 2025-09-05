@@ -364,7 +364,7 @@ def extract_links_and_text(soup, base_url):
 
 
 # Fetch recent news using Google News RSS
-def fetch_recent_news(company_name: str, months: int = 6, max_results: int = 5) -> List[str]:
+def fetch_recent_news_rss(company_name: str, months: int = 6, max_results: int = 5) -> List[str]:
     try:
         query = company_name.replace(" ", "+")
         url = f"https://news.google.com/rss/search?q={query}+when:{months}m&hl=en-IN&gl=IN&ceid=IN:en"
@@ -388,6 +388,45 @@ def fetch_recent_news(company_name: str, months: int = 6, max_results: int = 5) 
         print(f"News fetch error: {e}")
         return []
 
+def fetch_news_gnews_api(company_name: str, max_results: int = 5) -> List[str]:
+    """Fetch company updates via GNews API (recent)"""
+    api_key = st.secrets["NEWS_API_KEY"]
+    base_url = "https://gnews.io/api/v4/search"
+    params = {
+        "q": company_name,
+        "token": api_key,
+        "lang": "en",
+        "max": max_results,
+        "sortby": "publishedAt"
+    }
+
+    try:
+        response = requests.get(base_url, params=params, timeout=10)
+        if response.status_code != 200:
+            return []
+
+        data = response.json()
+        articles = data.get("articles", [])
+
+        news_list = []
+        for article in articles:
+            title = article.get("title", "")
+            description = article.get("description", "")
+            url = article.get("url", "")
+            if title and url:
+                news_list.append(f"Title: {title}\nDescription: {description}\nURL: {url}")
+        return news_list
+    except Exception as e:
+        print(f"GNews API error for {company_name}: {e}")
+        return []
+
+
+def fetch_news_with_fallbacks(company_name: str, months: int = 6, max_results: int = 5) -> List[str]:
+    """Try fetching news via RSS first, then fall back to GNews API"""
+    news = fetch_recent_news_rss(company_name, months, max_results)
+    if not news:
+        news = fetch_news_gnews_api(company_name, max_results)
+    return news
 # Summarize news and structure into JSON matching main output
 def summarize_and_structure_news(news_list: List[str]) -> Dict:
     if not news_list:
@@ -460,7 +499,7 @@ async def bulk_analysis(model_option: str):
                 if not extracted_content:
                     #  Fallback: Use news-based analysis
                     company_name_fallback = row.get("company_name", "") or url.split("//")[-1].split("/")[0]
-                    news_list = fetch_recent_news(company_name_fallback)
+                    news_list = fetch_news_with_fallbacks(company_name_fallback)
 
                     if news_list:
                         news_analysis = summarize_and_structure_news(news_list)
@@ -573,8 +612,37 @@ def main():
                 extracted_content, company_name, links = asyncio.run(extract_website_content(company_url))
 
                 if not extracted_content:
-                    st.error("Failed to extract content from the website.")
+                    st.warning("Website scraping failed. Falling back to recent news sources...")
+                    company_name_fallback = company_url.split("//")[-1].split("/")[0]
+                    news_list = fetch_news_with_fallbacks(company_name_fallback)
+
+                    if news_list:
+                        source_urls = []
+                        for item in news_list:
+                            for line in item.split("\n"):
+                                if line.startswith("URL:"):
+                                    source_urls.append(line.replace("URL:", "").strip())
+                                    
+                        news_analysis = summarize_and_structure_news(news_list)
+                        if news_analysis:
+                            display_results({
+                "company_name": company_name_fallback,
+                "growth_initiatives": news_analysis.get("growth_initiatives", []),
+                "it_issues": news_analysis.get("it_issues", []),
+                "industry_pain_points": news_analysis.get("industry_pain_points", ""),
+                "company_pain_points": news_analysis.get("company_pain_points", ""),
+                "products_services": news_analysis.get("products_services", ""),
+                "source_urls": source_urls,
+                "pitch": news_analysis.get("pitch", ""),
+                "analysis_complete": True
+                            })
+                        else:
+                            st.error("Could not analyze fallback news data.")
+                    else:
+                        st.error("No news found from RSS or GNews API.")
                     return
+
+
 
                 initial_state = CompanyState(
                     company_url=company_url, 
